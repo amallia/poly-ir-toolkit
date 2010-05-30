@@ -1,0 +1,5 @@
+Regarding code style, the Google C++ Style Guide
+(found at http://google-styleguide.googlecode.com/svn/trunk/cppguide.xml)
+should be followed. It's very practical and easy to get into; although I
+explicitly did not follow the 80 character line limit; I instead doubled it to
+160, which works better for wide screen monitors.
