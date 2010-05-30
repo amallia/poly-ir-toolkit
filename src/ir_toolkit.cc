@@ -332,7 +332,7 @@ void Help() {
   cout << "To cat: irtk --cat [INDEX_FILENAME] [LEXICON_FILENAME] [DOCUMENT_MAP_FILENAME] [META_FILENAME]\n";
   cout << "To diff: irtk --diff [INDEX1_FILENAME] [LEXICON1_FILENAME] [DOCUMENT_MAP1_FILENAME] [META1_FILENAME] [INDEX2_FILENAME] [LEXICON2_FILENAME] [DOCUMENT2_MAP_FILENAME] [META2_FILENAME]\n";
   cout << "To run compression tests: irtk --test-compression\n";
-  cout << "To test a particular coder: irtk --test-coder [rice, turbo-rice, pfor, s9, s16, vbyte]\n";
+  cout << "To test a particular coder: irtk --test-coder [rice, turbo-rice, pfor, s9, s16, vbyte, null]\n";
   cout << endl;
 }
 
