@@ -1,6 +1,7 @@
-CXXFLAGS =	-O2 -g -Wall #-DNDEBUG
+CXXFLAGS =	-O2 -g -Wall -pg #-DNDEBUG
 			#-Wvla : warns about variable length arrays.
 			#-DNDEBUG : defines NDEBUG to turn off assertions.
+			#-pg : enables code profiling.
 
 OBJS =		src/cache_manager.o \
 			src/configuration.o \
@@ -33,12 +34,18 @@ OBJS =		src/cache_manager.o \
 			src/compression_toolkit/vbyte_coding.o \
 			src/compression_toolkit/unpack.o
 
-LIBS =		-lpthread -lrt -lz #-lefence
+LIBS =		-lpthread -lrt -lz #-lc_p #-lefence
+			#-lpthread : pthreads support.
+			#-lrt : necessary for POSIX Asynchronous I/O support (AIO).
+			#-lz : zlib support.
+			#-lc_p : profiling support for C library calls.
+			#-lefence : electric fence memory debugger (only used for debugging).
 
 TARGET =	irtk
 
 $(TARGET):	$(OBJS)
-	$(CXX) -o $(TARGET) $(OBJS) $(LIBS)
+	$(CXX) -pg -o $(TARGET) $(OBJS) $(LIBS)
+	#-pg : enables code profiling.
 
 all:	$(TARGET)
 
