@@ -44,6 +44,7 @@
 
 #include "index_merge.h"
 
+#include <cerrno>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
@@ -335,8 +336,8 @@ IndexMerger::~IndexMerger() {
  *
  * TODO: Current parameters assume that the input files are all from the initial indexing step; other cases should also be possible.
  **************************************************************************************************************************************************************/
-CollectionMerger::CollectionMerger(int num_initial_indices, int merge_degree) :
-  kMergeDegree(merge_degree) {
+CollectionMerger::CollectionMerger(int num_initial_indices, int merge_degree, bool delete_merged_files) :
+  kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files) {
   GetDefaultLogger().Log("Merging " + logger::Stringify(num_initial_indices) + " indices with merge degree " + logger::Stringify(merge_degree), false);
 
   vector<IndexFiles> input_index_files;
@@ -364,16 +365,37 @@ CollectionMerger::CollectionMerger(vector<IndexFiles>& input_index_files, int me
   Partition(input_index_files, 1, num_passes);
 }
 
-// TODO: Check return values for rename() and remove().
 void CollectionMerger::Partition(const vector<IndexFiles>& input_index_files, int pass_num, int num_passes) {
   if (input_index_files.size() == 1) {
     IndexFiles final_index_files;
     const IndexFiles& curr_index_files = input_index_files.front();
 
-    rename(curr_index_files.index_filename().c_str(), final_index_files.index_filename().c_str());
-    rename(curr_index_files.lexicon_filename().c_str(), final_index_files.lexicon_filename().c_str());
-    rename(curr_index_files.document_map_filename().c_str(), final_index_files.document_map_filename().c_str());
-    rename(curr_index_files.meta_info_filename().c_str(), final_index_files.meta_info_filename().c_str());
+    int rename_ret;
+
+    rename_ret = rename(curr_index_files.index_filename().c_str(), final_index_files.index_filename().c_str());
+    if (rename_ret == -1) {
+      GetErrorLogger().LogErrno("Could not rename index file '" + curr_index_files.index_filename() + "' to final name '" + final_index_files.index_filename()
+          + "'", errno, false);
+    }
+
+    rename_ret = rename(curr_index_files.lexicon_filename().c_str(), final_index_files.lexicon_filename().c_str());
+    if (rename_ret == -1) {
+      GetErrorLogger().LogErrno("Could not rename lexicon file '" + curr_index_files.lexicon_filename() + "' to final name '"
+          + final_index_files.lexicon_filename() + "'", errno, false);
+    }
+
+    rename_ret = rename(curr_index_files.document_map_filename().c_str(), final_index_files.document_map_filename().c_str());
+    if (rename_ret == -1) {
+      GetErrorLogger().LogErrno("Could not rename document map file '" + curr_index_files.document_map_filename() + "' to final name '"
+          + final_index_files.document_map_filename() + "'", errno, false);
+    }
+
+    rename_ret = rename(curr_index_files.meta_info_filename().c_str(), final_index_files.meta_info_filename().c_str());
+    if (rename_ret == -1) {
+      GetErrorLogger().LogErrno("Could not rename meta info file '" + curr_index_files.meta_info_filename() + "' to final name '"
+          + final_index_files.meta_info_filename() + "'", errno, false);
+    }
+
     return;
   }
 
@@ -402,10 +424,31 @@ void CollectionMerger::Partition(const vector<IndexFiles>& input_index_files, in
         assert(false);  // This shouldn't happen.
         break;
       case 1:
-        rename(curr_pass_index_files[0].index_filename().c_str(), curr_out_index_files.index_filename().c_str());
-        rename(curr_pass_index_files[0].lexicon_filename().c_str(), curr_out_index_files.lexicon_filename().c_str());
-        rename(curr_pass_index_files[0].document_map_filename().c_str(), curr_out_index_files.document_map_filename().c_str());
-        rename(curr_pass_index_files[0].meta_info_filename().c_str(), curr_out_index_files.meta_info_filename().c_str());
+        int rename_ret;
+
+        rename_ret = rename(curr_pass_index_files[0].index_filename().c_str(), curr_out_index_files.index_filename().c_str());
+        if (rename_ret == -1) {
+          GetErrorLogger().LogErrno("Could not rename index file '" + curr_pass_index_files[0].index_filename() + "' to '"
+              + curr_out_index_files.index_filename() + "'", errno, false);
+        }
+
+        rename_ret = rename(curr_pass_index_files[0].lexicon_filename().c_str(), curr_out_index_files.lexicon_filename().c_str());
+        if (rename_ret == -1) {
+          GetErrorLogger().LogErrno("Could not rename lexicon file '" + curr_pass_index_files[0].lexicon_filename() + "' to '"
+              + curr_out_index_files.lexicon_filename() + "'", errno, false);
+        }
+
+        rename_ret = rename(curr_pass_index_files[0].document_map_filename().c_str(), curr_out_index_files.document_map_filename().c_str());
+        if (rename_ret == -1) {
+          GetErrorLogger().LogErrno("Could not rename document map file '" + curr_pass_index_files[0].document_map_filename() + "' to '"
+              + curr_out_index_files.document_map_filename() + "'", errno, false);
+        }
+
+        rename_ret = rename(curr_pass_index_files[0].meta_info_filename().c_str(), curr_out_index_files.meta_info_filename().c_str());
+        if (rename_ret == -1) {
+          GetErrorLogger().LogErrno("Could not rename meta info file '" + curr_pass_index_files[0].meta_info_filename() + "' to '"
+              + curr_out_index_files.meta_info_filename() + "'", errno, false);
+        }
         break;
       default:
         IndexMerger* merger = new IndexMerger(curr_pass_index_files, curr_out_index_files);
@@ -414,12 +457,31 @@ void CollectionMerger::Partition(const vector<IndexFiles>& input_index_files, in
         break;
     }
 
-    // Delete files we no longer need to conserve disk space.
-    for (size_t j = 0; j < curr_pass_index_files.size(); j++) {
-      remove(curr_pass_index_files[j].index_filename().c_str());
-      remove(curr_pass_index_files[j].lexicon_filename().c_str());
-      remove(curr_pass_index_files[j].document_map_filename().c_str());
-      remove(curr_pass_index_files[j].meta_info_filename().c_str());
+    if (kDeleteMergedFiles) {
+      // Delete files we no longer need to conserve disk space.
+      for (size_t j = 0; j < curr_pass_index_files.size(); j++) {
+        int remove_ret;
+
+        remove_ret = remove(curr_pass_index_files[j].index_filename().c_str());
+        if (remove_ret == -1) {
+          GetErrorLogger().LogErrno("Could not remove index file '" + curr_pass_index_files[j].index_filename() + "'", errno, false);
+        }
+
+        remove_ret = remove(curr_pass_index_files[j].lexicon_filename().c_str());
+        if (remove_ret == -1) {
+          GetErrorLogger().LogErrno("Could not remove lexicon file '" + curr_pass_index_files[j].lexicon_filename() + "'", errno, false);
+        }
+
+        remove_ret = remove(curr_pass_index_files[j].document_map_filename().c_str());
+        if (remove_ret == -1) {
+          GetErrorLogger().LogErrno("Could not remove document map file '" + curr_pass_index_files[j].document_map_filename() + "'", errno, false);
+        }
+
+        remove_ret = remove(curr_pass_index_files[j].meta_info_filename().c_str());
+        if (remove_ret == -1) {
+          GetErrorLogger().LogErrno("Could not remove meta info file '" + curr_pass_index_files[j].meta_info_filename() + "'", errno, false);
+        }
+      }
     }
 
     curr_pass_index_files.clear();

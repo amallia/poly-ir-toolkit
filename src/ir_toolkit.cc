@@ -292,6 +292,7 @@ void Merge(int merge_degree) {
   closedir(dir);
 
   const int kDefaultMergeDegree = 64;
+  const bool kDeleteMergedFiles = (Configuration::GetConfiguration().GetValue("delete_merged_files") == "true") ? true : false;
   CollectionMerger merger(num_indices, (merge_degree <= 0 ? kDefaultMergeDegree : merge_degree));
 }
 

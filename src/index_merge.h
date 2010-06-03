@@ -65,13 +65,14 @@ private:
  **************************************************************************************************************************************************************/
 class CollectionMerger {
 public:
-  CollectionMerger(int num_initial_indices, int merge_degree);
+  CollectionMerger(int num_initial_indices, int merge_degree, bool delete_merged_files);
   CollectionMerger(std::vector<IndexFiles>& input_index_files, int merge_degree);
 
   void Partition(const std::vector<IndexFiles>& input_index_files, int pass_num, int num_passes);
 
 private:
   const int kMergeDegree;
+  const bool kDeleteMergedFiles;
 };
 
 #endif /* INDEX_MERGE_H_ */
