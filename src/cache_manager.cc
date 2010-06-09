@@ -109,7 +109,8 @@ void LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_bl
       while (lru_list_itr != lru_list_.end() && cache_block_info_.IsBlockPinned(lru_list_itr->first)) {
         ++lru_list_itr;
       }
-      assert(lru_list_itr != lru_list_.end());
+      assert(lru_list_itr != lru_list_.end());  // Most likely need to increase the block cache size, and/or decrease the number of read ahead blocks.
+                                                // Alternatively, put a limit on the number of unique words in a single query.
 
       // Evict someone from the cache.
       // We will also cancel any pending aio requests associated with it.
