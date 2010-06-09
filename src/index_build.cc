@@ -87,22 +87,19 @@ const int Chunk::kChunkSize;  // Initialized in the class definition.
 const int Chunk::kMaxProperties;  // Initialized in the class definition.
 
 Chunk::Chunk(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int num_docs, int num_properties,
-             uint32_t prev_chunk_last_doc_id, bool ordered_doc_ids) :
-  num_docs_(num_docs), size_(0), last_doc_id_(prev_chunk_last_doc_id), compressed_doc_ids_(NULL), compressed_doc_ids_len_(0), compressed_frequencies_(NULL),
-      compressed_frequencies_len_(0), compressed_positions_(NULL), compressed_positions_len_(0), compressed_contexts_(NULL), compressed_contexts_len_(0) {
-  // 'ordered_doc_ids' indicates that the doc ids are ordered and we need to use the last doc id from the previous chunk.
-  if (ordered_doc_ids) {
-    for (int i = 0; i < num_docs; ++i) {
-      last_doc_id_ += doc_ids[i];
-    }
-  } else {
-    last_doc_id_ = doc_ids[num_docs - 1];
+             uint32_t prev_chunk_last_doc_id) :
+  num_docs_(num_docs), num_properties_(num_properties), size_(0), first_doc_id_(prev_chunk_last_doc_id), last_doc_id_(first_doc_id_),
+      compressed_doc_ids_(NULL), compressed_doc_ids_len_(0), compressed_frequencies_(NULL), compressed_frequencies_len_(0), compressed_positions_(NULL),
+      compressed_positions_len_(0), compressed_contexts_(NULL), compressed_contexts_len_(0) {
+  for (int i = 0; i < num_docs; ++i) {
+    last_doc_id_ += doc_ids[i];  // The docIDs are d-gap coded. We need to decode them (and add them to the last docID from the previous chunk) to find the last docID in this chunk.
   }
 
   //TODO: Here we have to pick the right compress functions to call, or do it by inheritance.
   CompressDocIds(doc_ids, num_docs);
   CompressFrequencies(frequencies, num_docs);
-  CompressPositions(positions, num_properties);
+  if (positions != NULL)
+    CompressPositions(positions, num_properties_);
 
   // Calculate total compressed size of this chunk in bytes.
   size_ = compressed_doc_ids_len_ * sizeof(*compressed_doc_ids_) + compressed_frequencies_len_ * sizeof(*compressed_frequencies_) + compressed_positions_len_
@@ -298,27 +295,42 @@ void Block::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len) {
     int doc_ids_len = chunks_[i]->compressed_doc_ids_len();
     num_bytes = doc_ids_len * sizeof(*doc_ids);
     assert(block_bytes_offset + num_bytes <= block_bytes_len);
-    memcpy(block_bytes + block_bytes_offset, doc_ids, num_bytes);
-    block_bytes_offset += num_bytes;
-    num_doc_ids_bytes_ += num_bytes;
+    if (doc_ids != NULL && doc_ids_len != 0) {
+      memcpy(block_bytes + block_bytes_offset, doc_ids, num_bytes);
+      block_bytes_offset += num_bytes;
+      num_doc_ids_bytes_ += num_bytes;
+    } else {
+      assert(doc_ids == NULL && doc_ids_len == 0);  // If either one is NULL / 0, both are expected to be NULL / 0.
+      assert(false);  // DocIDs should always be present.
+    }
 
     // Frequencies.
     const uint32_t* frequencies = chunks_[i]->compressed_frequencies();
     int frequencies_len = chunks_[i]->compressed_frequencies_len();
     num_bytes = frequencies_len * sizeof(*frequencies);
     assert(block_bytes_offset + num_bytes <= block_bytes_len);
-    memcpy(block_bytes + block_bytes_offset, frequencies, num_bytes);
-    block_bytes_offset += num_bytes;
-    num_frequency_bytes_ += num_bytes;
+    if (frequencies != NULL && frequencies_len != 0) {
+      memcpy(block_bytes + block_bytes_offset, frequencies, num_bytes);
+      block_bytes_offset += num_bytes;
+      num_frequency_bytes_ += num_bytes;
+    } else {
+      assert(frequencies == NULL && frequencies_len == 0);  // If either one is NULL / 0, both are expected to be NULL / 0.
+      assert(false);  // Frequencies should always be present.
+    }
 
     // Positions.
     const uint32_t* positions = chunks_[i]->compressed_positions();
     int positions_len = chunks_[i]->compressed_positions_len();
     num_bytes = positions_len * sizeof(*positions);
     assert(block_bytes_offset + num_bytes <= block_bytes_len);
-    memcpy(block_bytes + block_bytes_offset, positions, num_bytes);
-    block_bytes_offset += num_bytes;
-    num_positions_bytes_ += num_bytes;
+    if (positions != NULL && positions_len != 0) {
+      memcpy(block_bytes + block_bytes_offset, positions, num_bytes);
+      block_bytes_offset += num_bytes;
+      num_positions_bytes_ += num_bytes;
+    } else {
+      assert(positions == NULL && positions_len == 0);  // If either one is NULL / 0, both are expected to be NULL / 0.
+      // If we don't have positions, then possibly we're building an index without them.
+    }
   }
 
   // Fill remaining wasted space with 0s.
@@ -336,8 +348,8 @@ IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filen
       curr_chunk_number_(0), kIndexFilename(index_filename),
       index_fd_(open(kIndexFilename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)), kLexiconBufferSize(65536),
       lexicon_(new InvertedListMetaData*[kLexiconBufferSize]), lexicon_offset_(0), lexicon_fd_(open(lexicon_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR
-          | S_IWUSR | S_IRGRP | S_IROTH)), total_num_block_header_bytes_(0), total_num_doc_ids_bytes_(0), total_num_frequency_bytes_(0),
-      total_num_positions_bytes_(0), total_num_wasted_space_bytes_(0) {
+          | S_IWUSR | S_IRGRP | S_IROTH)), num_unique_terms_(0), posting_count_(0), total_num_block_header_bytes_(0), total_num_doc_ids_bytes_(0),
+      total_num_frequency_bytes_(0), total_num_positions_bytes_(0), total_num_wasted_space_bytes_(0) {
   if (index_fd_ == -1) {
     GetErrorLogger().LogErrno("open(), trying to open index for writing", errno, true);
   }
@@ -362,6 +374,9 @@ IndexBuilder::~IndexBuilder() {
 void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
   assert(term != NULL && term_len > 0);
 
+  // Update index statistics.
+  posting_count_ += chunk.num_properties();
+
   if (!curr_block_->AddChunk(chunk)) {
     // Reset chunk counter and increase block counter.
     ++curr_block_number_;
@@ -377,7 +392,7 @@ void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
     }
   }
 
-  InvertedListMetaData* curr_lexicon_entry = lexicon_offset_ == 0 ? NULL : lexicon_[lexicon_offset_ - 1];
+  InvertedListMetaData* curr_lexicon_entry = ((lexicon_offset_ == 0) ? NULL : lexicon_[lexicon_offset_ - 1]);
   if (curr_lexicon_entry == NULL || (curr_lexicon_entry->term_len() != term_len
       || strncasecmp(curr_lexicon_entry->term(), term, curr_lexicon_entry->term_len()) != 0)) {
     // If our lexicon buffer is full, dump it to disk.
@@ -387,6 +402,7 @@ void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
 
     // This chunk belongs to a new term, so we have to insert it into the lexicon.
     lexicon_[lexicon_offset_++] = new InvertedListMetaData(term, term_len, curr_block_number_, curr_chunk_number_, chunk.num_docs());
+    ++num_unique_terms_;  // This really just follows the 'lexicon_offset_'.
   } else {
     // Update the existing term in the lexicon with more docs.
     curr_lexicon_entry->UpdateNumDocs(chunk.num_docs());

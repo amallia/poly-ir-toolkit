@@ -153,7 +153,6 @@ public:
   }
 
 private:
-  const char* kUncompressedCollectionBufferSizeKey;
   int document_collection_buffer_size_;
   char* document_collection_buffer_;
 

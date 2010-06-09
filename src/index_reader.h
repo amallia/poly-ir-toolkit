@@ -47,8 +47,12 @@
  **************************************************************************************************************************************************************/
 class DecodedChunk {
 public:
-  DecodedChunk(const uint32_t* buffer, int num_docs);
+  struct DecodedChunkProperties {
+    bool includes_contexts;
+    bool includes_positions;
+  };
 
+  DecodedChunk(const DecodedChunkProperties& properties, const uint32_t* buffer, int num_docs);
   int DecodeDocIds(const uint32_t* compressed_doc_ids);
   int DecodeFrequencies(const uint32_t* compressed_frequencies);
   int DecodePositions(const uint32_t* compressed_positions);
@@ -127,6 +131,9 @@ public:
   static const int kMaxProperties = MAX_FREQUENCY_PROPERTIES;
 
 private:
+  // Controls aspects of how this chunk performs decoding.
+  DecodedChunkProperties properties_;
+
   // The number of documents in this chunk.
   int num_docs_;
   // Array of decompressed doc ids. If stored gap coded, the gaps are not decoded here, but rather during query processing.
@@ -404,7 +411,7 @@ private:
  **************************************************************************************************************************************************************/
 class ListData {
 public:
-  ListData(int initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager);
+  ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager);
   ~ListData();
 
   void AdvanceToNextBlock();
@@ -446,23 +453,20 @@ public:
   }
 
 private:
+  // The number of blocks we want to read ahead into the cache.
+  const int kReadAheadBlocks;
+
   CacheManager& cache_manager_;
 
-  // FIXME: the block nums should be uint64_t
-
   // The initial block number this list starts in.
-  int initial_block_num_;
-
-  // The number of blocks we want to read ahead into the cache.
-  // TODO: Make configurable.
-  const int kReadAheadBlocks;
+  uint64_t initial_block_num_;
 
   // The (next to) last block number queued for transfer. Once we are up to the this block number,
   // we know that we need to queue up this block as well as the next 'kReadAheadBlocks' more blocks for transfer.
-  int last_queued_block_num_;
+  uint64_t last_queued_block_num_;
 
   // The current block number we're up to during traversal of the inverted list.
-  int curr_block_num_;
+  uint64_t curr_block_num_;
 
   // Pointer to the current block being processed in this inverted list.
   BlockData* curr_block_;
@@ -501,7 +505,8 @@ public:
     kSorted, kSortedGapCoded
   };
 
-  IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename);
+  IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
+              const char* meta_info_filename);
 
   ListData* OpenList(const LexiconData& lex_data);
   void CloseList(ListData* list_data);
@@ -514,20 +519,20 @@ public:
   void LoadDocMap(const char* doc_map_filename);
   void LoadMetaInfo(const char* meta_info_filename);
 
-  uint32_t collection_average_doc_len() const {
-    return collection_average_doc_len_;
-  }
-
-  uint32_t collection_total_num_docs() const {
-    return collection_total_num_docs_;
-  }
-
   Lexicon& lexicon() {
     return lexicon_;
   }
 
   const KeyValueStore& meta_info() const {
     return meta_info_;
+  }
+
+  bool includes_contexts() const {
+    return includes_contexts_;
+  }
+
+  bool includes_positions() const {
+    return includes_positions_;
   }
 
 private:
@@ -547,14 +552,10 @@ private:
   // Manages the block cache.
   CacheManager& cache_manager_;
 
-  // The average document length of a document in the indexed collection.
-  // This plays a role in the ranking function.
-  uint32_t collection_average_doc_len_;
-  // The total number of documents in the indexed collection.
-  // This plays a role in the ranking function.
-  uint32_t collection_total_num_docs_;
-
   KeyValueStore meta_info_;
+
+  bool includes_contexts_;
+  bool includes_positions_;
 };
 
 /**************************************************************************************************************************************************************

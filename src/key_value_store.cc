@@ -37,7 +37,7 @@
 #include <iostream>
 using namespace std;
 
-string KeyValueStore::GetValue(const std::string& key) const {
+string KeyValueStore::GetValue(const string& key) const {
   for (vector<KeyValuePair>::const_iterator itr = key_value_store_.begin(); itr != key_value_store_.end(); ++itr) {
     if (key == itr->first)
       return itr->second;
@@ -45,7 +45,7 @@ string KeyValueStore::GetValue(const std::string& key) const {
   return string();
 }
 
-void KeyValueStore::AddKeyValuePair(const std::string& key, const std::string& value) {
+void KeyValueStore::AddKeyValuePair(const string& key, const string& value) {
   key_value_store_.push_back(make_pair(key, value));
 }
 

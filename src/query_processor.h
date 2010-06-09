@@ -35,6 +35,7 @@
 #include <cassert>
 #include <stdint.h>
 
+#include <iostream>
 #include <queue>
 #include <string>
 #include <utility>
@@ -69,11 +70,11 @@ public:
   void AcceptQuery();
   int ProcessQuery(std::vector<std::string>& words, Results& results);
   void ExecuteQuery(std::string query_line, int qid);
-  void RunBatchQueries();
+  void RunBatchQueries(std::istream& is);
+  void LoadIndexProperties();
+  void PrintQueryingParameters();
 
 private:
-  // The key in the configuration file used to define the max number of results.
-  const char* kMaxNumberResultsKey;
   // The max number of results to display.
   const int kMaxNumberResults;
 
@@ -84,6 +85,15 @@ private:
 
   LruCachePolicy cache_policy_;
   IndexReader index_reader_;
+
+  // The average document length of a document in the indexed collection.
+  // This plays a role in the ranking function.
+  uint32_t collection_average_doc_len_;
+  // The total number of documents in the indexed collection.
+  uint32_t collection_total_num_docs_;
+
+  // Whether positions will be utilized during ranking (requires index built with positions).
+  bool use_positions_;
 };
 
 #endif /* QUERY_PROCESSOR_H_ */

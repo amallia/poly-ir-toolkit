@@ -70,6 +70,10 @@ private:
 
   Index* index1_;
   Index* index2_;
+
+  // Some index properties.
+  bool includes_contexts_;
+  bool includes_positions_;
 };
 
 #endif /* INDEX_DIFF_H_ */

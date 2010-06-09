@@ -32,10 +32,13 @@
 #ifndef PARSER_CALLBACK_H_
 #define PARSER_CALLBACK_H_
 
-#include <string>
 #include <iostream>
-#include <algorithm>
+#include <string>
+
 #include <strings.h>
+
+#include "globals.h"
+#include "logger.h"
 #include "posting_collection.h"
 
 class ParserCallback {
@@ -56,6 +59,18 @@ inline ParserCallback::ParserCallback(PostingCollectionController* posting_colle
 }
 
 inline void ParserCallback::ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context) {
+  // TODO: Detects skips in docIDs. Assumes docIDs assigned sequentially. For catching potential parser bugs.
+  static int lost_doc_id_count = 0;
+  static uint32_t prev_doc_id = 0;
+  if (doc_id > prev_doc_id) {
+    if (doc_id > (prev_doc_id + 1)) {
+      GetErrorLogger().Log("No postings for docID: " + logger::Stringify(prev_doc_id + 1) + " and " + logger::Stringify(doc_id - prev_doc_id - 2)
+          + " more docs.", false);
+      lost_doc_id_count += (doc_id - prev_doc_id - 1);
+    }
+    prev_doc_id = doc_id;
+  }
+
   Posting posting(term, term_len, doc_id, position, context);
   posting_collection_controller_->InsertPosting(posting);
 }
@@ -69,6 +84,7 @@ inline void ParserCallback::ProcessDocLength(int doc_length, uint32_t doc_id) {
 }
 
 // Indicates the start of a new document.
+// The TREC DOCNO specifies the document bundle folder, bundle file, and the document's byte offset within the uncompressed bundle file.
 inline void ParserCallback::ProcessDocno(const char* docno, int docno_len, uint32_t doc_id) {
 }
 

@@ -101,81 +101,93 @@ private:
 /**************************************************************************************************************************************************************
  * Chunk
  *
+ * Assumes that all docIDs are in sorted, monotonically increasing order, so naturally, they are assumed to be d-gap coded.
  **************************************************************************************************************************************************************/
-class Chunk
-{
+class Chunk {
 public:
-    Chunk(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int num_docs, int num_properties, uint32_t prev_chunk_last_doc_id, bool ordered_doc_ids);
-    ~Chunk();
+  Chunk(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int num_docs, int num_properties,
+        uint32_t prev_chunk_last_doc_id);
+  ~Chunk();
 
-    void CompressDocIds(uint32_t* doc_ids, int doc_ids_len);
-    void CompressFrequencies(uint32_t* frequencies, int frequencies_len);
-    void CompressPositions(uint32_t* positions, int positions_len);
+  void CompressDocIds(uint32_t* doc_ids, int doc_ids_len);
+  void CompressFrequencies(uint32_t* frequencies, int frequencies_len);
+  void CompressPositions(uint32_t* positions, int positions_len);
 
-    uint32_t last_doc_id() const {
-      return last_doc_id_;
-    }
+  uint32_t first_doc_id() const {
+    return first_doc_id_;
+  }
 
-    // Returns the total size of the compressed portions of this chunk in bytes.
-    int size() const {
-      return size_;
-    }
+  uint32_t last_doc_id() const {
+    return last_doc_id_;
+  }
 
-    int num_docs() const {
-      return num_docs_;
-    }
+  // Returns the total size of the compressed portions of this chunk in bytes.
+  int size() const {
+    return size_;
+  }
 
-    const uint32_t* compressed_doc_ids() const {
-      return compressed_doc_ids_;
-    }
+  int num_docs() const {
+    return num_docs_;
+  }
 
-    int compressed_doc_ids_len() const {
-      return compressed_doc_ids_len_;
-    }
+  int num_properties() const {
+    return num_properties_;
+  }
 
-    const uint32_t* compressed_frequencies() const {
-      return compressed_frequencies_;
-    }
+  const uint32_t* compressed_doc_ids() const {
+    return compressed_doc_ids_;
+  }
 
-    int compressed_frequencies_len() const {
-      return compressed_frequencies_len_;
-    }
+  int compressed_doc_ids_len() const {
+    return compressed_doc_ids_len_;
+  }
 
-    const uint32_t* compressed_positions() const {
-      return compressed_positions_;
-    }
+  const uint32_t* compressed_frequencies() const {
+    return compressed_frequencies_;
+  }
 
-    int compressed_positions_len() const {
-      return compressed_positions_len_;
-    }
+  int compressed_frequencies_len() const {
+    return compressed_frequencies_len_;
+  }
 
-    const unsigned char* compressed_contexts() const {
-      return compressed_contexts_;
-    }
+  const uint32_t* compressed_positions() const {
+    return compressed_positions_;
+  }
 
-    int compressed_contexts_len() const {
-      return compressed_contexts_len_;
-    }
+  int compressed_positions_len() const {
+    return compressed_positions_len_;
+  }
 
-    static const int kChunkSize = CHUNK_SIZE;
-    static const int kMaxProperties = MAX_FREQUENCY_PROPERTIES;
+  const unsigned char* compressed_contexts() const {
+    return compressed_contexts_;
+  }
+
+  int compressed_contexts_len() const {
+    return compressed_contexts_len_;
+  }
+
+  static const int kChunkSize = CHUNK_SIZE;
+  static const int kMaxProperties = MAX_FREQUENCY_PROPERTIES;
 private:
-    int num_docs_;
-    int size_;  // Size of the compressed chunk in bytes.
+  int num_docs_;  // Number of unique documents included in this chunk.
+  int num_properties_;  // Indicates the total number of frequencies (also positions and contexts if they are included).
+                        // Also the same as the number of postings.
+  int size_;  // Size of the compressed chunk in bytes.
 
-    uint32_t last_doc_id_;
+  uint32_t first_doc_id_;  // Decoded first docID in this chunk.
+  uint32_t last_doc_id_;  // Decoded last docID in this chunk.
 
-    uint32_t* compressed_doc_ids_;
-    int compressed_doc_ids_len_;
+  uint32_t* compressed_doc_ids_;
+  int compressed_doc_ids_len_;
 
-    uint32_t* compressed_frequencies_;
-    int compressed_frequencies_len_;
+  uint32_t* compressed_frequencies_;
+  int compressed_frequencies_len_;
 
-    uint32_t* compressed_positions_;
-    int compressed_positions_len_;
+  uint32_t* compressed_positions_;
+  int compressed_positions_len_;
 
-    unsigned char* compressed_contexts_;
-    int compressed_contexts_len_;
+  unsigned char* compressed_contexts_;
+  int compressed_contexts_len_;
 };
 
 /**************************************************************************************************************************************************************
@@ -265,12 +277,17 @@ public:
   ~IndexBuilder();
 
   void WriteBlocks();
-
   void Add(const Chunk& chunk, const char* term, int term_len);
-
   void WriteLexicon();
-
   void Finalize();
+
+  uint64_t num_unique_terms() const {
+    return num_unique_terms_;
+  }
+
+  uint64_t posting_count() const {
+    return posting_count_;
+  }
 
   uint64_t total_num_block_header_bytes() const {
     return total_num_block_header_bytes_;
@@ -308,6 +325,10 @@ private:
   InvertedListMetaData** lexicon_;
   int lexicon_offset_;
   int lexicon_fd_;
+
+  // Index statistics.
+  uint64_t num_unique_terms_;
+  uint64_t posting_count_;
 
   // The breakdown of bytes in this index.
   uint64_t total_num_block_header_bytes_;

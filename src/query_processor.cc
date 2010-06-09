@@ -40,11 +40,14 @@
 
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <sstream>
 
+#include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
 #include "logger.h"
+#include "meta_file_properties.h"
 #include "timer.h"
 using namespace std;
 
@@ -54,12 +57,16 @@ using namespace std;
  **************************************************************************************************************************************************************/
 QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
                                QueryFormat query_format) :
-  kMaxNumberResultsKey("max_number_results"), kMaxNumberResults(atoi(Configuration::GetConfiguration().GetValue(kMaxNumberResultsKey).c_str())),
-      result_format_(kNormal), query_format_(query_format), cache_policy_(index_filename),
-      index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename) {
+  kMaxNumberResults(atol(Configuration::GetConfiguration().GetValue(config_properties::kMaxNumberResults).c_str())), result_format_(kNormal),
+      query_format_(query_format), cache_policy_(index_filename), index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, cache_policy_,
+                                                                                lexicon_filename, doc_map_filename, meta_info_filename),
+      collection_average_doc_len_(0), collection_total_num_docs_(0), use_positions_(false) {
   if (kMaxNumberResults <= 0) {
-    GetErrorLogger().Log("Incorrect configuration value for '" + string(kMaxNumberResultsKey) + "'", true);
+    GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kMaxNumberResults) + "'", true);
   }
+
+  LoadIndexProperties();
+  PrintQueryingParameters();
 
   switch (query_format_) {
     case kInteractive:
@@ -67,7 +74,7 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
       AcceptQuery();
       break;
     case kBatch:
-      RunBatchQueries();
+      RunBatchQueries(cin);
       break;
     default:
       assert(false);
@@ -118,12 +125,11 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
   }
 
   uint32_t did = 0;
-  uint32_t max_doc_id = index_reader_.collection_total_num_docs() - 1;
-  while (did <= max_doc_id) {
+  while (did < numeric_limits<uint32_t>::max()) {
     // Get next element from shortest list.
     did = index_reader_.NextGEQ(lp[0], did);
 
-    if (did > max_doc_id)
+    if (did == numeric_limits<uint32_t>::max())
       break;
 
     uint32_t d = did;
@@ -150,32 +156,34 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
         acc_t[i] = 0.0;
       }
 
-      for (size_t i = 0; i < q.size(); ++i) {
-        DecodedChunk* decoded_chunk_top = lp[i]->curr_block()->GetCurrChunk();
-        const uint32_t* positions_top = decoded_chunk_top->GetCurrentPositions();
+      if (use_positions_) {
+        for (size_t i = 0; i < q.size(); ++i) {
+          DecodedChunk* decoded_chunk_top = lp[i]->curr_block()->GetCurrChunk();
+          const uint32_t* positions_top = decoded_chunk_top->GetCurrentPositions();
 
-        for (size_t j = i + 1; j < q.size(); ++j) {
-          DecodedChunk* decoded_chunk_bottom = lp[j]->curr_block()->GetCurrChunk();
-          const uint32_t* positions_bottom = decoded_chunk_bottom->GetCurrentPositions();
+          for (size_t j = i + 1; j < q.size(); ++j) {
+            DecodedChunk* decoded_chunk_bottom = lp[j]->curr_block()->GetCurrChunk();
+            const uint32_t* positions_bottom = decoded_chunk_bottom->GetCurrentPositions();
 
-          uint32_t positions_top_actual = 0;  // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
-          for (uint32_t k = 0; k < decoded_chunk_top->GetCurrentFrequency(); ++k) {
-            positions_top_actual += positions_top[k];
+            uint32_t positions_top_actual = 0; // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
+            for (uint32_t k = 0; k < decoded_chunk_top->GetCurrentFrequency(); ++k) {
+              positions_top_actual += positions_top[k];
 
-            uint32_t positions_bottom_actual = 0;  // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
-            for (size_t l = 0; l < decoded_chunk_bottom->GetCurrentFrequency(); ++l) {
-              positions_bottom_actual += positions_bottom[l];
+              uint32_t positions_bottom_actual = 0; // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
+              for (size_t l = 0; l < decoded_chunk_bottom->GetCurrentFrequency(); ++l) {
+                positions_bottom_actual += positions_bottom[l];
 
-              int dist = positions_top_actual - positions_bottom_actual;
-              assert(dist != 0);  // This is an indication of a bug in the program.
+                int dist = positions_top_actual - positions_bottom_actual;
+                assert(dist != 0); // This is an indication of a bug in the program.
 
-              float ids = 1.0 / (dist * dist);
+                float ids = 1.0 / (dist * dist);
 
-              int f_t_i = q[i]->num_docs();
-              int f_t_j = q[j]->num_docs();
+                int f_t_i = q[i]->num_docs();
+                int f_t_j = q[j]->num_docs();
 
-              acc_t[i] += log10((index_reader_.collection_total_num_docs() - f_t_i + 0.5) / (f_t_i + 0.5)) * ids;
-              acc_t[j] += log10((index_reader_.collection_total_num_docs() - f_t_j + 0.5) / (f_t_j + 0.5)) * ids;
+                acc_t[i] += log10((collection_total_num_docs_ - f_t_i + 0.5) / (f_t_i + 0.5)) * ids;
+                acc_t[j] += log10((collection_total_num_docs_ - f_t_j + 0.5) / (f_t_j + 0.5)) * ids;
+              }
             }
           }
         }
@@ -185,9 +193,9 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
       float bm_25_sum = 0;
       for (size_t i = 0; i < q.size(); ++i) {
         int f_t = q[i]->num_docs();
-        float K = 1.2 * ((1 - 0.75) + 0.75 * (index_reader_.GetDocLen(did) / index_reader_.collection_average_doc_len()));
+        float K = 1.2 * ((1 - 0.75) + 0.75 * (index_reader_.GetDocLen(did) / collection_average_doc_len_));
 
-        float w_t = log10((index_reader_.collection_total_num_docs() - f_t + 0.5) / (f_t + 0.5));
+        float w_t = log10((collection_total_num_docs_ - f_t + 0.5) / (f_t + 0.5));
         bm_25_sum += w_t * (((1.2 + 1) * f_d_t[i]) / (K + f_d_t[i]));
 
         // Add the proximity stuff.
@@ -269,64 +277,44 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
     cout << "\nShowing " << results_size << " results out of " << total_num_results << ". (" << query_time.GetElapsedTime() << " seconds)\n";
 }
 
-// TODO: Allow queries to be loaded from a file.
-void QueryProcessor::RunBatchQueries() {
-  // Sample TREC queries.
-  ExecuteQuery("U S oil industry history", 701);
-  ExecuteQuery("Pearl farming", 702);
-  ExecuteQuery("U S against International Criminal Court", 703);
-  ExecuteQuery("Green party political views", 704);
-  ExecuteQuery("Iraq foreign debt reduction", 705);
-  ExecuteQuery("Controlling type II diabetes", 706);
-  ExecuteQuery("Aspirin cancer prevention", 707);
-  ExecuteQuery("Decorative slate sources", 708);
-  ExecuteQuery("Horse racing jockey weight", 709);
-  ExecuteQuery("Prostate cancer treatments", 710);
-  ExecuteQuery("Train station security measures", 711);
-  ExecuteQuery("Pyramid scheme", 712);
-  ExecuteQuery("Chesapeake Bay Maryland clean", 713);
-  ExecuteQuery("License restrictions older drivers", 714);
-  ExecuteQuery("Schizophrenia drugs", 715);
-  ExecuteQuery("Spammer arrest sue", 716);
-  ExecuteQuery("Gifted talented student programs", 717);
-  ExecuteQuery("Controlling acid rain", 718);
-  ExecuteQuery("Cruise ship damage sea life", 719);
-  ExecuteQuery("Federal welfare reform", 720);
-  ExecuteQuery("Census data applications", 721);
-  ExecuteQuery("Iran terrorism", 722);
-  ExecuteQuery("Executive privilege", 723);
-  ExecuteQuery("Iran Contra", 724);
-  ExecuteQuery("Low white blood cell count", 725);
-  ExecuteQuery("Hubble telescope repairs", 726);
-  ExecuteQuery("Church arson", 727);
-  ExecuteQuery("whales save endangered", 728);
-  ExecuteQuery("Whistle blower department of defense", 729);
-  ExecuteQuery("Gastric bypass complications", 730);
-  ExecuteQuery("Kurds history", 731);
-  ExecuteQuery("U S cheese production", 732);
-  ExecuteQuery("Airline overbooking", 733);
-  ExecuteQuery("Recycling successes", 734);
-  ExecuteQuery("Afghan women condition", 735);
-  ExecuteQuery("location BSE infections", 736);
-  ExecuteQuery("Enron California energy crisis", 737);
-  ExecuteQuery("Anthrax hoaxes", 738);
-  ExecuteQuery("Habitat for Humanity", 739);
-  ExecuteQuery("regulate assisted living Maryland", 740);
-  ExecuteQuery("Artificial Intelligence", 741);
-  ExecuteQuery("hedge funds fraud protection", 742);
-  ExecuteQuery("Freighter ship registration", 743);
-  ExecuteQuery("Counterfeit ID punishments", 744);
-  ExecuteQuery("Doomsday cults", 745);
-  ExecuteQuery("Outsource job India", 746);
-  ExecuteQuery("Library computer oversight", 747);
-  ExecuteQuery("Nuclear reactor types", 748);
-  ExecuteQuery("Puerto Rico state", 749);
-  ExecuteQuery("John Edwards womens issues", 750);
+void QueryProcessor::RunBatchQueries(istream& is) {
+  string query_line;
+  while (getline(is, query_line)) {
+    size_t colon_pos = query_line.find(':');
+    if (colon_pos != string::npos && colon_pos < (query_line.size() - 1)) {
+      string query = query_line.substr(colon_pos + 1);
+      ExecuteQuery(query, 0);
+    } else {
+      ExecuteQuery(query_line, 0);
+    }
+  }
+}
 
-  // TODO: Made up queries...
-  ExecuteQuery("oil industry", 0);
-  ExecuteQuery("cupertino job", 0);
-  ExecuteQuery("the", 0);
-  ExecuteQuery("government and politics", 0);
-  ExecuteQuery("hello world", 0);
+void QueryProcessor::LoadIndexProperties() {
+  collection_total_num_docs_ = atol(index_reader_.meta_info().GetValue(meta_properties::kTotalNumDocs).c_str());
+  if (collection_total_num_docs_ <= 0) {
+    GetErrorLogger().Log("The '" + string(meta_properties::kTotalNumDocs) + "' value in the loaded index meta file seems to be incorrect.", false);
+  }
+
+  uint64_t collection_total_document_lengths = atol(index_reader_.meta_info().GetValue(meta_properties::kTotalDocumentLengths).c_str());
+  if (collection_total_document_lengths <= 0) {
+    GetErrorLogger().Log("The '" + string(meta_properties::kTotalDocumentLengths) + "' value in the loaded index meta file seems to be incorrect.", false);
+  }
+
+  collection_average_doc_len_ = collection_total_document_lengths / collection_total_num_docs_;
+
+  // Default is not to use positions.
+  if (index_reader_.includes_positions()) {
+    string use_positions = Configuration::GetConfiguration().GetValue(config_properties::kUsePositions);
+    if (use_positions == "true") {
+      use_positions_ = true;
+    }
+  }
+}
+
+void QueryProcessor::PrintQueryingParameters() {
+  cout << "collection_total_num_docs_: " << collection_total_num_docs_ << endl;
+  cout << "collection_average_doc_len_: " << collection_average_doc_len_ << endl;
+  cout << "Using positions: " << use_positions_ << endl;
+  cout << endl;
 }

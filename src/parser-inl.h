@@ -130,6 +130,9 @@ template<class Callback>
                 context = 0;
                 position = 0;
                 ++doc_id;
+
+                // Need to reset certain properties before moving on to the next document.
+                in_script = false;
               }
             } else {
               in_doc = true;
@@ -139,6 +142,7 @@ template<class Callback>
           case kTagDocno:
             if (doc_type_ != kTrec)
               break;
+
             in_docno = in_closing_tag ? false : true;
             break;
 

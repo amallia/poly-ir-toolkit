@@ -47,6 +47,10 @@ public:
 
 private:
   Index* index_;
+
+  // Some index properties.
+  bool includes_contexts_;
+  bool includes_positions_;
 };
 
 #endif /* INDEX_CAT_H_ */

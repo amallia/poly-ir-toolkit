@@ -26,68 +26,63 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
+// Defines standard properties that are used by config file readers.
 //==============================================================================================================================================================
 
-#ifndef INDEX_MERGE_H_
-#define INDEX_MERGE_H_
+#ifndef CONFIG_FILE_PROPERTIES_H_
+#define CONFIG_FILE_PROPERTIES_H_
 
-#include <stdint.h>
-
-#include <vector>
-
-#include "index_build.h"
-#include "index_util.h"
+namespace config_properties {
 
 /**************************************************************************************************************************************************************
- * IndexMerger
+ * Indexing Parameters
  *
  **************************************************************************************************************************************************************/
-class IndexMerger {
-public:
-  IndexMerger(const std::vector<IndexFiles>& input_index_files, const IndexFiles& out_index_files);
-  ~IndexMerger();
+// Size of the hash table used for posting accumulation.
+static const char kHashTableSize[] = "hash_table_size";
 
-  void Merge();
+// The initial buffer size to use for uncompressing document collection files.
+static const char kDocumentCollectionBufferSize[] = "document_collection_buffer_size";
 
-private:
-  void MergeOneHeap();
-  void MergeTwoHeaps();
-  void PrepareLists(Index** list_heap, int* list_heap_size, Index** same_term_indices, int* num_same_term_indices, const char* term, int term_len);
-  void MergeLists(Index** posting_heap, int posting_heap_size, const char* term, int term_len);
-  void WriteMetaFile();
+// Size of the memory pool for posting accumulation.
+static const char kMemoryPoolSize[] = "memory_pool_size";
 
-  IndexFiles out_index_files_;
-  IndexBuilder* index_builder_;
-  std::vector<Index*> indices_;
+// Size of each memory pool block. Should be kept small to make the most use of memory. The smaller the size, the less memory we waste for very small lists,
+// but the more overall pointer overhead we have since we have to store a pointer for each block allocated in the memory pool.
+static const char kMemoryPoolBlockSize[] = "memory_pool_block_size";
 
-  // Some index properties.
-  bool includes_contexts_;
-  bool includes_positions_;
+// Controls whether positions will be indexed.
+static const char kIncludePositions[] = "include_positions";
 
-  // The following properties are derived from the individual index meta info files.
-  uint32_t total_num_docs_;  // The total number of documents in the merged index.
-  uint32_t total_unique_num_docs_;  // The total number of unique documents in the merged index.
-  uint64_t total_document_lengths_;  // The total document lengths of all documents in the merged index.
-  uint64_t document_posting_count_;  // The total document posting count in the merged index.
-  uint64_t index_posting_count_;  // The total index posting count in the merged index.
-  uint32_t first_doc_id_in_index_;  // The first docID in the merged index.
-  uint32_t last_doc_id_in_index_;  // The last docID in the merged index.
-};
+// Controls whether contexts will be indexed.
+static const char kIncludeContexts[] = "include_contexts";
 
 /**************************************************************************************************************************************************************
- * CollectionMerger
+ * Merging Parameters
  *
  **************************************************************************************************************************************************************/
-class CollectionMerger {
-public:
-  CollectionMerger(int num_initial_indices, int merge_degree, bool delete_merged_files);
-  CollectionMerger(std::vector<IndexFiles>& input_index_files, int merge_degree, bool delete_merged_files);
+// Controls whether files that have already been merged should be deleted (Saves considerable disk space).
+static const char kDeleteMergedFiles[] = "delete_merged_files";
 
-  void Partition(const std::vector<IndexFiles>& input_index_files, int pass_num, int num_passes);
+/**************************************************************************************************************************************************************
+ * Querying Parameters
+ *
+ **************************************************************************************************************************************************************/
+// The number of blocks to cache in memory.
+static const char kBlockCacheSize[] = "block_cache_size";
 
-private:
-  const int kMergeDegree;
-  const bool kDeleteMergedFiles;
-};
+// The number of blocks to read ahead from a list into the cache.
+static const char kReadAheadBlocks[] = "read_ahead_blocks";
 
-#endif /* INDEX_MERGE_H_ */
+// Size of the hash table used for the lexicon.
+static const char kLexiconSize[] = "lexicon_size";
+
+// The maximum number of results returned by the query processor.
+static const char kMaxNumberResults[] = "max_number_results";
+
+// Controls whether positions will be utilized if the index was built with positions.
+static const char kUsePositions[] = "use_positions";
+
+} // namespace config_properties
+
+#endif /* CONFIG_FILE_PROPERTIES_H_ */

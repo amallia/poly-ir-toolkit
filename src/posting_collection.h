@@ -154,21 +154,13 @@ public:
   unsigned char* AllocateBlock();
 
   unsigned char* GetNextBlockStart(unsigned char* curr_block_pos) {
-    unsigned char* next_block_start = memory_pool_ + ((((curr_block_pos - memory_pool_) / kBlockSize_) + 1) * kBlockSize_);
+    unsigned char* next_block_start = memory_pool_ + ((((curr_block_pos - memory_pool_) / kBlockSize) + 1) * kBlockSize);
     return next_block_start;
   }
 
   bool HaveSpace(unsigned char* curr_block_pos, int posting_len);
 
   void Reset();
-
-  int kMemoryPoolSize() const {
-    return kMemoryPoolSize_;
-  }
-
-  int kBlockSize() const {
-   return kBlockSize_;
-  }
 
   unsigned char* memory_pool() const {
     return memory_pool_;
@@ -178,10 +170,11 @@ public:
     return curr_allocated_block_;
   }
 
+  const int kMemoryPoolSize;
+  const int kBlockSize;
+
 private:
   PostingCollection* posting_collection_;
-  const int kMemoryPoolSize_;
-  const int kBlockSize_;
 
   unsigned char* memory_pool_;
   unsigned char* curr_allocated_block_;
@@ -201,7 +194,7 @@ public:
   }
 
   bool IsWithinBlock(const unsigned char* pos) const {
-    if (pos - block_ < GetMemoryPoolManager().kBlockSize())
+    if (pos - block_ < GetMemoryPoolManager().kBlockSize)
       return true;
     return false;
   }
@@ -299,8 +292,28 @@ public:
 
   void AddBlockToList(unsigned char* block_start);
 
-  bool OrderedDocuments() const {
-    return kOrderedDocuments;
+  bool ordered_documents() const {
+    return ordered_documents_;
+  }
+
+  void set_ordered_documents(bool ordered_documents) {
+    ordered_documents_ = ordered_documents;
+  }
+
+  bool index_positions() const {
+    return index_positions_;
+  }
+
+  void set_index_positions(bool index_positions) {
+    index_positions_ = index_positions;
+  }
+
+  bool index_contexts() const {
+    return index_contexts_;
+  }
+
+  void set_index_contexts(bool index_contexts) {
+    index_contexts_ = index_contexts_;
   }
 
 private:
@@ -313,9 +326,12 @@ private:
   char* term_;
   int term_len_;
 
-  const bool kOrderedDocuments;  // Determines whether the doc ids are monotonically increasing.
+  // These are properties of the index to be built. They should be set before adding any postings.
+  bool ordered_documents_;  // Determines whether the docIDs are monotonically increasing.
+  bool index_positions_;  // Determines whether the position information will be collected.
+  bool index_contexts_;  // Determines whether context information will be collected.
 
-  uint32_t prev_doc_id_;  // Necessary for taking doc_id deltas.
+  uint32_t prev_doc_id_;  // Necessary for taking docID deltas.
   uint32_t prev_position_;  // Necessary for taking position deltas within a document.
 
   BlockList* block_list_;
@@ -364,6 +380,7 @@ private:
  *
  * Class in charge of accumulating postings in memory and dumping them to "mini", fully self contained and usable indexes.
  **************************************************************************************************************************************************************/
+class IndexBuilder;
 class PostingCollection {
 public:
   class OverflowPostings {
@@ -391,6 +408,7 @@ public:
   bool InsertPosting(const Posting& posting);
   void AddLeftOverPosting(const char* term, int term_len);
   void DumpRun(bool out_of_memory_dump);
+  void WriteMetaFile(IndexBuilder* index_builder);
   bool ReachedThreshold() const;
 
   OverflowPostings GetOverflowPostings() {
@@ -424,11 +442,26 @@ private:
   uint32_t last_doc_id_in_index_;
   int num_overflow_postings_;
 
+  uint32_t prev_doc_id_;  // Used to detect postings associated with a new (never before seen) docID.
+  int prev_doc_length_;  // Used to keep track of the lengths of documents.
+
+  // The following members can be used together to calculate the average document length in this index.
+  uint64_t total_document_lengths_;  // The sum of all document lengths in this index.
+  uint32_t total_num_docs_;  // The range of docIDs in the index.
+
+  uint32_t total_unique_num_docs_;  // The total number of unique documents in this index (where each document has at least one posting).
+                                    // This can be different from 'total_num_docs_' when some documents don't contribute any postings to the index.
+
   // The current mini index we're working on building.
   int index_count_;
 
   // For statistics purposes. Counts the number of postings in the current index we're building.
   uint64_t posting_count_;
+
+  // Properties of the index to be built.
+  const bool kOrderedDocuments;  // Whether the docIDs are assigned in order.
+  const bool kIndexPositions;  // Whether positions are indexed.
+  const bool kIndexContexts;  // Whether contexts are indexed.
 };
 
 #endif /* POSTING_COLLECTION_H_ */

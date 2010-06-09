@@ -35,6 +35,7 @@
 
 #include <fstream>
 
+#include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
 #include "ir_toolkit.h"
@@ -71,13 +72,11 @@ int DocumentCollection::Fill(char** document_collection_buf, int* document_colle
  *
  **************************************************************************************************************************************************************/
 IndexCollection::IndexCollection() :
-  kUncompressedCollectionBufferSizeKey("uncompressed_document_collection_initial_buffer_size"),
-      document_collection_buffer_size_(atoi(Configuration::GetConfiguration().GetValue(kUncompressedCollectionBufferSizeKey).c_str())),
-      document_collection_buffer_(new char[document_collection_buffer_size_]), parser_callback_(&GetPostingCollectionController()), parser_(Parser<
-          ParserCallback>::kManyDoc, Parser<ParserCallback>::kTrec, &parser_callback_), doc_id_(0), avg_doc_length_(0) {
-
+  document_collection_buffer_size_(atol(Configuration::GetConfiguration().GetValue(config_properties::kDocumentCollectionBufferSize).c_str())),
+      document_collection_buffer_(new char[document_collection_buffer_size_]), parser_callback_(&GetPostingCollectionController()),
+      parser_(Parser<ParserCallback>::kManyDoc, Parser<ParserCallback>::kTrec, &parser_callback_), doc_id_(0), avg_doc_length_(0) {
   if (document_collection_buffer_size_ == 0)
-    GetErrorLogger().Log("Check configuration setting for '" + string(kUncompressedCollectionBufferSizeKey) + "'.", true);
+    GetErrorLogger().Log("Check configuration setting for '" + string(config_properties::kDocumentCollectionBufferSize) + "'.", true);
 }
 
 IndexCollection::~IndexCollection() {
@@ -85,14 +84,22 @@ IndexCollection::~IndexCollection() {
 }
 
 void IndexCollection::AddCollection(const string& path) {
-  DocumentCollection doc_collection(path);
-  doc_collections_.push_back(doc_collection);
+  ifstream ifs;
+  ifs.open(path.c_str(), ifstream::in);
+  ifs.close();
+  if (!ifs.fail()) {
+    DocumentCollection doc_collection(path);
+    doc_collections_.push_back(doc_collection);
+  } else {
+    GetErrorLogger().Log("Could not open document collection file '" + path + "'. Skipping...", false);
+  }
 }
 
 void IndexCollection::ProcessDocumentCollections(istream& is) {
   string path;
   while (getline(is, path)) {
-    AddCollection(path);
+    if (path.size() > 0)
+      AddCollection(path);
   }
 }
 

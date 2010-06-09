@@ -38,6 +38,7 @@
 
 #include <iostream>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 
@@ -52,10 +53,12 @@
 #include "compression_toolkit/s9_coding.h"
 #include "compression_toolkit/s16_coding.h"
 #include "compression_toolkit/vbyte_coding.h"
+#include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
 #include "index_layout_parameters.h"
 #include "logger.h"
+#include "meta_file_properties.h"
 #include "timer.h"
 using namespace std;
 
@@ -66,9 +69,9 @@ using namespace std;
 const int DecodedChunk::kChunkSize;  // Initialized in the class definition.
 const int DecodedChunk::kMaxProperties;  // Initialized in the class definition.
 
-DecodedChunk::DecodedChunk(const uint32_t* buffer, int num_docs) :
-  num_docs_(num_docs), curr_document_offset_(0), prev_document_offset_(0), curr_position_offset_(0), prev_decoded_doc_id_(0), num_positions_(0),
-      decoded_properties_(false), curr_buffer_position_(buffer) {
+DecodedChunk::DecodedChunk(const DecodedChunkProperties& properties, const uint32_t* buffer, int num_docs) :
+  properties_(properties), num_docs_(num_docs), curr_document_offset_(0), prev_document_offset_(0), curr_position_offset_(0), prev_decoded_doc_id_(0),
+      num_positions_(0), decoded_properties_(false), curr_buffer_position_(buffer) {
   curr_buffer_position_ += DecodeDocIds(curr_buffer_position_);
 }
 
@@ -89,7 +92,8 @@ int DecodedChunk::DecodeDocIds(const uint32_t* compressed_doc_ids) {
 
 void DecodedChunk::DecodeProperties() {
   curr_buffer_position_ += DecodeFrequencies(curr_buffer_position_);
-  curr_buffer_position_ += DecodePositions(curr_buffer_position_);
+  if (properties_.includes_positions)
+    curr_buffer_position_ += DecodePositions(curr_buffer_position_);
 
   curr_buffer_position_ = NULL;  // This pointer is no longer valid
   decoded_properties_ = true;
@@ -359,10 +363,15 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
  * ListData
  *
  **************************************************************************************************************************************************************/
-ListData::ListData(int initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager) :
-  cache_manager_(cache_manager), initial_block_num_(initial_block_num), kReadAheadBlocks(64), last_queued_block_num_(initial_block_num + kReadAheadBlocks),
-      curr_block_num_(initial_block_num_), curr_block_(NULL), num_docs_left_(num_docs), num_chunks_left_((num_docs / DecodedChunk::kChunkSize) + ((num_docs
-          % DecodedChunk::kChunkSize == 0) ? 0 : 1)), prev_block_last_doc_id_(0) {
+ListData::ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager) :
+  kReadAheadBlocks(atol(Configuration::GetConfiguration().GetValue(config_properties::kReadAheadBlocks).c_str())), cache_manager_(cache_manager),
+      initial_block_num_(initial_block_num), last_queued_block_num_(initial_block_num + kReadAheadBlocks), curr_block_num_(initial_block_num_),
+      curr_block_(NULL), num_docs_left_(num_docs), num_chunks_left_((num_docs / DecodedChunk::kChunkSize) + ((num_docs % DecodedChunk::kChunkSize == 0) ? 0 : 1)),
+      prev_block_last_doc_id_(0) {
+  if (kReadAheadBlocks <= 0) {
+    GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kReadAheadBlocks) + "'", true);
+  }
+
   cache_manager_.QueueBlocks(initial_block_num_, last_queued_block_num_);
   curr_block_ = new BlockData(curr_block_num_, starting_chunk, cache_manager_);
 }
@@ -385,7 +394,7 @@ void ListData::AdvanceToNextBlock() {
     curr_block_ = NULL;
 
     // Free any blocks we read ahead, but won't be using since they're not part of the list.
-    for (int i = curr_block_num_; i < last_queued_block_num_; ++i) {
+    for (uint64_t i = curr_block_num_; i < last_queued_block_num_; ++i) {
       cache_manager_.FreeBlock(i);
     }
   }
@@ -394,7 +403,7 @@ void ListData::AdvanceToNextBlock() {
 ListData::~ListData() {
   if (curr_block_ != NULL) {
     // Free the current block plus any blocks we read ahead.
-    for (int i = curr_block_num_; i < last_queued_block_num_; ++i) {
+    for (uint64_t i = curr_block_num_; i < last_queued_block_num_; ++i) {
       cache_manager_.FreeBlock(i);
     }
 
@@ -410,11 +419,11 @@ ListData::~ListData() {
  **************************************************************************************************************************************************************/
 IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename,
                          const char* doc_map_filename, const char* meta_info_filename) :
-  purpose_(purpose), document_order_(document_order), kLexiconSizeKey("lexicon_size"),
-      kLexiconSize(atoi(Configuration::GetConfiguration().GetValue(kLexiconSizeKey).c_str())), lexicon_(kLexiconSize, lexicon_filename, (purpose_
-          == kRandomQuery)), cache_manager_(cache_manager), collection_average_doc_len_(0), collection_total_num_docs_(0) {
+  purpose_(purpose), document_order_(document_order), kLexiconSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kLexiconSize).c_str())),
+      lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)), cache_manager_(cache_manager), includes_contexts_(false),
+      includes_positions_(false) {
   if (kLexiconSize <= 0) {
-    GetErrorLogger().Log("Incorrect configuration value for '" + string(kLexiconSizeKey) + "'", true);
+    GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kLexiconSize) + "'", true);
   }
 
   LoadDocMap(doc_map_filename);
@@ -422,6 +431,7 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
 }
 
 ListData* IndexReader::OpenList(const LexiconData& lex_data) {
+  assert(lex_data.block_number() >= 0 && lex_data.chunk_number() >= 0 && lex_data.num_docs() >= 0);
   ListData* list_data = new ListData(lex_data.block_number(), lex_data.chunk_number(), lex_data.num_docs(), cache_manager_);
   return list_data;
 }
@@ -452,7 +462,10 @@ uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
 
           // Create a new chunk and add it to the block.
           block_data->UpdateCurrBlockData(j); // Moves the block data pointer to the current chunk we have to decode and takes into account chunk skipping.
-          chunk = new DecodedChunk(block_data->curr_block_data(), docs_in_chunk);
+          DecodedChunk::DecodedChunkProperties chunk_properties;
+          chunk_properties.includes_contexts = includes_contexts_;
+          chunk_properties.includes_positions = includes_positions_;
+          chunk = new DecodedChunk(chunk_properties, block_data->curr_block_data(), docs_in_chunk);
           block_data->AddChunk(chunk, j);
         } else {
           chunk = block_data->GetChunk(j);
@@ -511,7 +524,7 @@ uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
   }
 
   // No other chunks in this list have a doc id >= 'doc_id', so return this sentinel value to indicate this.
-  return collection_total_num_docs_;
+  return numeric_limits<uint32_t>::max();
 }
 
 uint32_t IndexReader::GetFreq(ListData* list_data, uint32_t doc_id) {
@@ -547,9 +560,19 @@ void IndexReader::LoadDocMap(const char* doc_map_filename) {
 }
 
 void IndexReader::LoadMetaInfo(const char* meta_info_filename) {
-  // TODO: Load from index meta file.
-  collection_average_doc_len_ = 100;
-  collection_total_num_docs_ = 1 << 31;
-
   meta_info_.LoadKeyValueStore(meta_info_filename);
+
+  string includes_contexts = meta_info_.GetValue(meta_properties::kIncludesContexts);
+  if (includes_contexts.size() > 0) {
+    includes_contexts_ = atoi(includes_contexts.c_str());
+  } else {
+    GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kIncludesContexts) + "' value.", false);
+  }
+
+  string includes_positions = meta_info_.GetValue(meta_properties::kIncludesPositions);
+  if (includes_positions.size() > 0) {
+    includes_positions_ = atoi(includes_positions.c_str());
+  } else {
+    GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kIncludesPositions) + "' value.", false);
+  }
 }

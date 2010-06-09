@@ -30,13 +30,10 @@
 //
 // High Priority:
 // TODO: Abstract away compression/decompression interfaces, including for the block header.
-// TODO: Create a 'NULL' compressor/decompressor interface; that is, it doesn't perform any compression.
 // TODO: Implement "checkpointing"; if the indexer is killed or even crashes, it should be able to start again without re-indexing everything.
-// TODO: Allow batch queries to be executed by reading from stdin.
 // TODO: The index cat and diff utilities should fully decode positions (right now it's outputting gap coded ones).
 // TODO: If we allow overlapping docIDs during merge (overlapping over several indices), then when merging positions, must fully decode them for each index
 //       first and then gap code them back again.
-// TODO: Investigate why zettair and IR Toolkit differ by 1 in some docIDs on certain queries.
 // TODO: Need to make sure the term hash table is of appropriate size during querying. Do it based on number of unique words in the index.
 // TODO: Consider outputting intermediate indices with crappier (but faster compression). In this case, compression speed is also important. This should result
 //       in faster merging and index building. Final index generation should use good compression methods. (Make it configurable). Can also try benchmarking
@@ -44,7 +41,6 @@
 // TODO: Allow configuration for user to specify how much memory to use while merging. Then system can pick buffer sizes, and appropriate merge degree.
 //       Choose merge degree so that we can merge in as few passes as possible, and so that every pass merges approximately the same amount of indices.
 //       I suspect this would result in better processor cache usage, since heaps will be smaller, and less buffers.
-// TODO: Ignore blank lines in list of document collection files to process, and don't stop when a file is missing, but output a warning message.
 //
 // Low Priority:
 // TODO: Detect whether a document collection is gzipped or not and automatically uncompress it or just load it into memory.
@@ -83,6 +79,7 @@
 #include <zlib.h>
 
 #include "cache_manager.h"
+#include "config_file_properties.h"
 #include "configuration.h"
 #include "document_collection.h"
 #include "globals.h"
@@ -97,13 +94,50 @@
 using namespace std;
 using namespace logger;
 
+struct CommandLineArgs {
+  CommandLineArgs() :
+    mode(kNoIdea), index1_filename("index.idx"), lexicon1_filename("index.lex"), doc_map1_filename("index.dmap"), meta_info1_filename("index.meta"),
+        index2_filename("index.idx"), lexicon2_filename("index.lex"), doc_map2_filename("index.dmap"), meta_info2_filename("index.meta"), merge_degree(0),
+        cat_diff_term(NULL), cat_diff_term_len(0), query_mode(QueryProcessor::kInteractive) {
+  }
+
+  ~CommandLineArgs() {
+    delete[] cat_diff_term;
+  }
+
+  enum Mode {
+    kIndex, kMerge, kQuery, kCat, kDiff, kNoIdea
+  };
+
+  Mode mode;
+  const char* index1_filename;
+  const char* lexicon1_filename;
+  const char* doc_map1_filename;
+  const char* meta_info1_filename;
+
+  const char* index2_filename;
+  const char* lexicon2_filename;
+  const char* doc_map2_filename;
+  const char* meta_info2_filename;
+
+  int merge_degree;
+
+  char* cat_diff_term;
+  int cat_diff_term_len;
+
+  QueryProcessor::QueryFormat query_mode;
+};
+static CommandLineArgs command_line_args;
+
+static const char document_collections_doc_id_ranges_filename[] = "document_collections_doc_id_ranges";
+
 IndexCollection& GetIndexCollection() {
   static IndexCollection index_collection;
   return index_collection;
 }
 
 // TODO: Proper cleanup needed, depending on what mode the program is running in. Delete incomplete indices, etc.
-void SignalHandler(int sig) {
+void SignalHandlerIndex(int sig) {
   GetDefaultLogger().Log("Received termination request. Cleaning up now...", false);
 
   IndexCollection& index_collection = GetIndexCollection();
@@ -111,6 +145,7 @@ void SignalHandler(int sig) {
 
   PostingCollectionController& posting_collection_controller = GetPostingCollectionController();
   // FIXME: It's possible that the parser callback will call this simultaneously as we're cleaning up.
+  //        Set some special variable in class that's feeding the parser to indicate it to finish up.
   posting_collection_controller.Finish();
 
   exit(0);
@@ -122,7 +157,17 @@ void InstallSignalHandler() {
   // Mask SIGINT.
   sigemptyset(&sig_action.sa_mask);
   sigaddset(&sig_action.sa_mask, SIGINT);
-  sig_action.sa_handler = SignalHandler;
+
+  // Install the signal handler for the correct mode we were started in.
+  switch (command_line_args.mode) {
+    case CommandLineArgs::kIndex:
+      sig_action.sa_handler = SignalHandlerIndex;
+      break;
+    default:
+      sig_action.sa_handler = SIG_DFL;
+      break;
+  }
+
   sigaction(SIGINT, &sig_action, 0);
 }
 
@@ -235,10 +280,6 @@ void Init() {
 #endif
 }
 
-void ProcessInputDocumentCollections(IndexCollection& index_collection) {
-  index_collection.ProcessDocumentCollections(cin);
-}
-
 void Query(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
            QueryProcessor::QueryFormat query_mode) {
   GetDefaultLogger().Log("Starting query processor with index file '" + Stringify(index_filename) + "', " + "lexicon file '" + Stringify(lexicon_filename)
@@ -253,7 +294,7 @@ void Index() {
 
   IndexCollection& index_collection = GetIndexCollection();
   // Input to the indexer is a list of document collection files we want to index in order.
-  ProcessInputDocumentCollections(index_collection);
+  index_collection.ProcessDocumentCollections(cin);
 
   // Start timing indexing process.
   Timer index_time;
@@ -292,8 +333,8 @@ void Merge(int merge_degree) {
   closedir(dir);
 
   const int kDefaultMergeDegree = 64;
-  const bool kDeleteMergedFiles = (Configuration::GetConfiguration().GetValue("delete_merged_files") == "true") ? true : false;
-  CollectionMerger merger(num_indices, (merge_degree <= 0 ? kDefaultMergeDegree : merge_degree));
+  const bool kDeleteMergedFiles = (Configuration::GetConfiguration().GetValue(config_properties::kDeleteMergedFiles) == "true") ? true : false;
+  CollectionMerger merger(num_indices, (merge_degree <= 0 ? kDefaultMergeDegree : merge_degree), kDeleteMergedFiles);
 }
 
 // TODO: Just for testing.
@@ -304,7 +345,7 @@ void TestMerge() {
     input_index_files.push_back(index_files);
   }
 
-  CollectionMerger merger(input_index_files, 64);
+  CollectionMerger merger(input_index_files, 64, false);
 }
 
 void Cat(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename, const char* term, int term_len) {
@@ -328,52 +369,19 @@ void Help() {
   cout << "To index: irtk --index\n";
   cout << "To merge: irtk --merge\n";
   cout << "  options:\n";
-  cout << "    --merge-degree: specify the merge degree to use (default: 64)\n";
-  cout << "To query: irtk --query [INDEX_FILENAME] [LEXICON_FILENAME] [DOCUMENT_MAP_FILENAME] [META_FILENAME]\n";
-  cout << "To cat: irtk --cat [INDEX_FILENAME] [LEXICON_FILENAME] [DOCUMENT_MAP_FILENAME] [META_FILENAME]\n";
-  cout << "To diff: irtk --diff [INDEX1_FILENAME] [LEXICON1_FILENAME] [DOCUMENT_MAP1_FILENAME] [META1_FILENAME] [INDEX2_FILENAME] [LEXICON2_FILENAME] [DOCUMENT2_MAP_FILENAME] [META2_FILENAME]\n";
+  cout << "    --merge-degree=[value]: specify the merge degree to use (default: 64)\n";
+  cout << "To query: irtk --query [IndexFilename] [LexiconFilename] [DocumentMapFilename] [MetaFilename]\n";
+  cout << "  options:\n";
+  cout << "    --query-mode=[value]: sets the mode of querying.\n";
+  cout << "                          value is 'interactive', 'interactive-single', or 'batch'\n";
+  cout << "To cat: irtk --cat [IndexFilename] [LexiconFilename] [DocumentMapFilename] [MetaFilename]\n";
+  cout << "To diff: irtk --diff [IndexFilename1] [LexiconFilename1] [DocumentMapFilename1] [MetaFilename1] [IndexFilename2] [LexiconFilename2] [DocumentMapFilename2] [MetaFilename2]\n";
   cout << "To run compression tests: irtk --test-compression\n";
   cout << "To test a particular coder: irtk --test-coder [rice, turbo-rice, pfor, s9, s16, vbyte, null]\n";
   cout << endl;
 }
 
-struct CommandLineArgs {
-  CommandLineArgs() :
-    mode(kNoIdea), index1_filename("index.idx"), lexicon1_filename("index.lex"), doc_map1_filename("index.dmap"), meta_info1_filename("index.meta"),
-        index2_filename("index.idx"), lexicon2_filename("index.lex"), doc_map2_filename("index.dmap"), meta_info2_filename("index.meta"), merge_degree(0),
-        cat_diff_term(NULL), cat_diff_term_len(0), query_mode(QueryProcessor::kInteractive) {
-  }
-
-  ~CommandLineArgs() {
-    delete[] cat_diff_term;
-  }
-
-  enum Mode {
-    kIndex, kMerge, kQuery, kCat, kDiff, kNoIdea
-  };
-
-  Mode mode;
-  const char* index1_filename;
-  const char* lexicon1_filename;
-  const char* doc_map1_filename;
-  const char* meta_info1_filename;
-
-  const char* index2_filename;
-  const char* lexicon2_filename;
-  const char* doc_map2_filename;
-  const char* meta_info2_filename;
-
-  int merge_degree;
-
-  char* cat_diff_term;
-  int cat_diff_term_len;
-
-  QueryProcessor::QueryFormat query_mode;
-};
-
 int main(int argc, char** argv) {
-  CommandLineArgs command_line_args;
-
   const char* opt_string = "imqcdth";
   const struct option long_opts[] = { { "index", no_argument, NULL, 'i' },
                                       { "merge", no_argument, NULL, 'm' },

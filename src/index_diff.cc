@@ -45,7 +45,7 @@ using namespace std;
  *
  **************************************************************************************************************************************************************/
 IndexDiff::IndexDiff(const IndexFiles& index_files1, const IndexFiles& index_files2) :
-  index1_(NULL), index2_(NULL) {
+  index1_(NULL), index2_(NULL), includes_contexts_(true), includes_positions_(true) {
   CacheManager* cache_policy1 = new MergingCachePolicy(index_files1.index_filename().c_str());
   IndexReader* index_reader1 = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy1, index_files1.lexicon_filename().c_str(),
                                                index_files1.document_map_filename().c_str(), index_files1.meta_info_filename().c_str());
@@ -53,6 +53,12 @@ IndexDiff::IndexDiff(const IndexFiles& index_files1, const IndexFiles& index_fil
   CacheManager* cache_policy2 = new MergingCachePolicy(index_files2.index_filename().c_str());
   IndexReader* index_reader2 = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy2, index_files2.lexicon_filename().c_str(),
                                                index_files2.document_map_filename().c_str(), index_files2.meta_info_filename().c_str());
+
+  // If one of the indices does not contain contexts or positions then we ignore them in both indices.
+  if (!index_reader1->includes_contexts() || !index_reader2->includes_contexts())
+    includes_contexts_ = false;
+  if (!index_reader1->includes_positions() || !index_reader2->includes_positions())
+    includes_positions_ = false;
 
   index1_ = new Index(cache_policy1, index_reader1);
   index2_ = new Index(cache_policy2, index_reader2);
@@ -88,10 +94,7 @@ void IndexDiff::Diff(const char* term, int term_len) {
       if ((term == NULL && term_len == 0) || (index1_->curr_term_len() == term_len && strncmp(index1_->curr_term(), term, term_len) == 0)) {
         // Check the frequencies and positions for any differences.
         uint32_t curr_frequency1 = index1_->index_reader()->GetFreq(index1_->curr_list_data(), index1_->curr_doc_id());
-        const uint32_t* curr_positions1 = index1_->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
-
         uint32_t curr_frequency2 = index2_->index_reader()->GetFreq(index2_->curr_list_data(), index2_->curr_doc_id());
-        const uint32_t* curr_positions2 = index2_->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
 
         if (curr_frequency1 != curr_frequency2) {
           printf("Frequencies differ: index1: %u, index2: %u (Postings from index1 and index2 shown below)\n", curr_frequency1, curr_frequency2);
@@ -100,57 +103,62 @@ void IndexDiff::Diff(const char* term, int term_len) {
           printf("\n");
         }
 
-        // This is similar to doing a merge on the positions, since they are in sorted order.
-        size_t i1 = 0;
-        size_t i2 = 0;
-        while (i1 < curr_frequency1 && i2 < curr_frequency2) {
-          if (curr_positions1[i1] == curr_positions2[i2]) {
-            ++i1;
-            ++i2;
-          } else {
-            printf("(%d, '", WhichIndex(((curr_positions1[i1] < curr_positions2[i2]) ? index1_ : index2_)));
-            for (int i = 0; i < index1_->curr_term_len(); ++i) {
-              printf("%c", index1_->curr_term()[i]);
-            }
-            printf("', ");
+        if (includes_positions_) {
+          const uint32_t* curr_positions1 = index1_->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
+          const uint32_t* curr_positions2 = index2_->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
 
-            if (curr_positions1[i1] < curr_positions2[i2]) {
-              // Index2 is missing this position from index1.
+          // This is similar to doing a merge on the positions, since they are in sorted order.
+          size_t i1 = 0;
+          size_t i2 = 0;
+          while (i1 < curr_frequency1 && i2 < curr_frequency2) {
+            if (curr_positions1[i1] == curr_positions2[i2]) {
+              ++i1;
+              ++i2;
+            } else {
+              printf("(%d, '", WhichIndex(((curr_positions1[i1] < curr_positions2[i2]) ? index1_ : index2_)));
+              for (int i = 0; i < index1_->curr_term_len(); ++i) {
+                printf("%c", index1_->curr_term()[i]);
+              }
+              printf("', ");
+
+              if (curr_positions1[i1] < curr_positions2[i2]) {
+                // Index2 is missing this position from index1.
+                printf("%u, {%u})\n", index1_->curr_doc_id(), curr_positions1[i1]);
+                ++i1;
+              } else if (curr_positions2[i2] < curr_positions1[i1]) {
+                // Index1 is missing this position from index2.
+                printf("%u, {%u})\n", index2_->curr_doc_id(), curr_positions2[i2]);
+                ++i2;
+              }
+            }
+          }
+
+          // Get any remaining positions in index1, which are missing from index2.
+          if (i1 < curr_frequency1) {
+            while (i1 < curr_frequency1) {
+              printf("(%d, '", WhichIndex(index1_));
+              for (int i = 0; i < index1_->curr_term_len(); ++i) {
+                printf("%c", index1_->curr_term()[i]);
+              }
+              printf("', ");
+
               printf("%u, {%u})\n", index1_->curr_doc_id(), curr_positions1[i1]);
               ++i1;
-            } else if (curr_positions2[i2] < curr_positions1[i1]) {
-              // Index1 is missing this position from index2.
+            }
+          }
+
+          // Get any remaining positions in index2, which are missing in index1.
+          if (i2 < curr_frequency2) {
+            while (i2 < curr_frequency2) {
+              printf("(%d, '", WhichIndex(index2_));
+              for (int i = 0; i < index2_->curr_term_len(); ++i) {
+                printf("%c", index2_->curr_term()[i]);
+              }
+              printf("', ");
+
               printf("%u, {%u})\n", index2_->curr_doc_id(), curr_positions2[i2]);
               ++i2;
             }
-          }
-        }
-
-        // Get any remaining positions in index1, which are missing from index2.
-        if (i1 < curr_frequency1) {
-          while (i1 < curr_frequency1) {
-            printf("(%d, '", WhichIndex(index1_));
-            for (int i = 0; i < index1_->curr_term_len(); ++i) {
-              printf("%c", index1_->curr_term()[i]);
-            }
-            printf("', ");
-
-            printf("%u, {%u})\n", index1_->curr_doc_id(), curr_positions1[i1]);
-            ++i1;
-          }
-        }
-
-        // Get any remaining positions in index2, which are missing in index1.
-        if (i2 < curr_frequency2) {
-          while (i2 < curr_frequency2) {
-            printf("(%d, '", WhichIndex(index2_));
-            for (int i = 0; i < index2_->curr_term_len(); ++i) {
-              printf("%c", index2_->curr_term()[i]);
-            }
-            printf("', ");
-
-            printf("%u, {%u})\n", index2_->curr_doc_id(), curr_positions2[i2]);
-            ++i2;
           }
         }
       }
@@ -203,14 +211,15 @@ void IndexDiff::Print(Index* index, const char* term, int term_len) {
     printf("', ");
 
     uint32_t curr_frequency = index->index_reader()->GetFreq(index->curr_list_data(), index->curr_doc_id());
-    const uint32_t* curr_positions = index->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
-
     printf("%u, %u, <", index->curr_doc_id(), curr_frequency);
 
-    for (size_t i = 0; i < curr_frequency; ++i) {
-      printf("%u", curr_positions[i]);
-      if (i != (curr_frequency - 1))
-        printf(", ");
+    if (includes_positions_) {
+      const uint32_t* curr_positions = index->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
+      for (size_t i = 0; i < curr_frequency; ++i) {
+        printf("%u", curr_positions[i]);
+        if (i != (curr_frequency - 1))
+          printf(", ");
+      }
     }
 
     printf(">)\n");

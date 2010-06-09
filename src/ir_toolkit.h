@@ -31,12 +31,8 @@
 #ifndef IR_TOOLKIT_H_
 #define IR_TOOLKIT_H_
 
-static const char document_collections_doc_id_ranges_filename[] = "document_collections_doc_id_ranges";
-
 class IndexCollection;
 IndexCollection& GetIndexCollection();
-
-const char* zerr(int ret);
 
 // Uncompresses data pointed by 'src' with length 'src_len' into 'dest'.
 // 'dest' will be resized as necessary to completely decompress the 'src' data.

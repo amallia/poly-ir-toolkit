@@ -41,6 +41,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
 #include "index_layout_parameters.h"
@@ -75,7 +76,7 @@ CacheManager::~CacheManager() {
  * Thus all queued blocks are pinned.  They will all have to be freed by the caller.
  **************************************************************************************************************************************************************/
 LruCachePolicy::LruCachePolicy(const char* index_filename) :
-  CacheManager(index_filename, atoi(Configuration::GetConfiguration().GetValue("block_cache_size").c_str())) {
+  CacheManager(index_filename, atol(Configuration::GetConfiguration().GetValue(config_properties::kBlockCacheSize).c_str())) {
   pthread_mutex_init(&query_mutex_, NULL);
 
   for (uint64_t i = 0; i < kCacheSize; ++i) {
@@ -96,9 +97,7 @@ LruCachePolicy::~LruCachePolicy() {
 void LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
   pthread_mutex_lock(&query_mutex_);  // Lock the mutex because we don't want 'cache_map_' to be read while it's being modified.
 
-  // TODO: This value needs to be coordinated with what is being used by the index reader (the read ahead blocks parameter in ListData).
-  const int kMaxQueue = 128;
-  struct aiocb* aiocb_list[kMaxQueue];
+  struct aiocb* aiocb_list[ending_block_num - starting_block_num];  // Variable length array here.
   int curr_aiocb_list_item = 0;
 
   for (uint64_t block_num = starting_block_num; block_num < ending_block_num; ++block_num) {
@@ -164,7 +163,7 @@ void LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_bl
     }
   }
 
-  pthread_mutex_unlock(&query_mutex_); // Safe to unlock the mutex because from this point on, not modifying any global or classwise structures.
+  pthread_mutex_unlock(&query_mutex_);  // Safe to unlock the mutex because from this point on, not modifying any global or classwise structures.
 
   int lio_listio_ret = lio_listio(LIO_NOWAIT, aiocb_list, curr_aiocb_list_item, NULL);
   assert(lio_listio_ret == 0);

@@ -30,6 +30,7 @@
 
 #include "index_util.h"
 
+#include <limits>
 #include <sstream>
 
 #include "cache_manager.h"
@@ -112,7 +113,7 @@ bool Index::NextTerm() {
 }
 
 bool Index::NextDocId() {
-  if (curr_list_data_ != NULL && (curr_doc_id_ = index_reader_->NextGEQ(curr_list_data_, next_doc_id_)) < index_reader_->collection_total_num_docs()) {
+  if (curr_list_data_ != NULL && (curr_doc_id_ = index_reader_->NextGEQ(curr_list_data_, next_doc_id_)) < numeric_limits<uint32_t>::max()) {
     next_doc_id_ = curr_doc_id_ + 1;
     return true;
   }

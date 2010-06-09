@@ -42,6 +42,11 @@
 //
 // TODO: Try new method of in-memory compression of postings. Collect n postings (or maybe until we run out of space in a block), then recompress them
 //       (and sort them if they're not in order) so that we can compact the postings even further, with a good compression method.
+//
+// TODO: If building an index without positions, contexts, and other per docID information, can optimize usage of the memory pool as follows. For each
+//       TermBlock, buffer the frequency count in memory for the last docID inserted for that particular term. Once we get a new docID (or we dump the run),
+//       can write the buffered frequency count into the memory pool. This allows more efficient use of the memory pool since we write each docID only once
+//       for a particular term, as opposed to multiple times, and then calculating the frequency later.
 //==============================================================================================================================================================
 
 #include "posting_collection.h"
@@ -57,10 +62,12 @@
 #include <string>
 #include <utility>
 
+#include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
 #include "index_build.h"
 #include "logger.h"
+#include "meta_file_properties.h"
 using namespace std;
 using namespace logger;
 
@@ -83,8 +90,8 @@ unsigned char TermBlock::compressed_tmp_posting[11];  // TODO: Does being intege
 int TermBlock::compressed_tmp_posting_len;
 
 TermBlock::TermBlock(const char* term, int term_len) :
-  memory_pool_manager_(&GetMemoryPoolManager()), term_(new char[term_len]), term_len_(term_len), kOrderedDocuments(true), prev_doc_id_(0), prev_position_(0),
-      block_list_(NULL), last_block_(NULL), curr_block_position_(NULL), next_(NULL) {
+  memory_pool_manager_(&GetMemoryPoolManager()), term_(new char[term_len]), term_len_(term_len), ordered_documents_(true), index_positions_(true),
+      index_contexts_(false), prev_doc_id_(0), prev_position_(0), block_list_(NULL), last_block_(NULL), curr_block_position_(NULL), next_(NULL) {
   // Need to transform term to lower case.
   for (int i = 0; i < term_len; i++) {
     term_[i] = tolower(static_cast<unsigned char> (term[i]));
@@ -241,17 +248,26 @@ bool TermBlock::DecodePosting(DecodedPosting* decoded_posting) {
   }
   // doc_id is decremented by one (one was added in the first place to maintain that a doc_id of zero means the end of the list).
   --doc_id;
+  decoded_posting->set_doc_id(doc_id);
 
   // Decode position.
-  uint32_t position = GetVarByteInt();
-  assert(position != numeric_limits<uint32_t>::max());  // End of list only makes sense at the start of the posting.
+  uint32_t position;
+  if (index_positions_) {
+    position = GetVarByteInt();
+    assert(position != numeric_limits<uint32_t>::max());  // End of list only makes sense at the start of the posting.
+  } else {
+    position = 0;
+  }
+  decoded_posting->set_position(position);
 
   // Decode context.
-  uint32_t context = GetByte();
-  assert(context != numeric_limits<uint32_t>::max());  // End of list only makes sense at the start of the posting.
-
-  decoded_posting->set_doc_id(doc_id);
-  decoded_posting->set_position(position);
+  uint32_t context;
+  if (index_contexts_) {
+    context = GetByte();
+    assert(context != numeric_limits<uint32_t>::max());  // End of list only makes sense at the start of the posting.
+  } else {
+    context = 0;
+  }
   decoded_posting->set_context(context);
 
   return true;
@@ -277,7 +293,7 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   assert(num_properties != NULL && *num_properties > 0);
   assert(prev_posting != NULL);
   assert(prev_posting_valid != NULL);
-  assert(kOrderedDocuments == true);
+  assert(ordered_documents_ == true);
 
   int num_docs_decoded = 0;
   int num_properties_decoded = 0;
@@ -286,8 +302,6 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   uint32_t curr_decoded_doc_id = prev_chunk_last_doc_id;
   uint32_t overflow_posting_position = 0;  // To decode the position gaps in the overflow posting.
   int overflow_postings_i = 0;
-
-  DecodedPosting curr_posting;
 
   if (!*prev_posting_valid) {
     if (DecodePosting(prev_posting) == false) {
@@ -320,13 +334,13 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   ++num_properties_decoded;
   ++num_properties_decoded_per_doc;
 
-
   // We read ahead one more document than we were allocated for to check whether the next document is a continuation of the previous one.
   // If it wasn't, since we can't "put back" the posting into the block, we'll store it into prev_posting and set prev_posting_valid to true, otherwise set it to false.
+  DecodedPosting curr_posting;
   while ((num_docs_decoded < (*num_docs + 1)) && DecodePosting(&curr_posting)) {
-//    if (prev_posting.doc_id() == curr_posting.doc_id()) { //TODO: For when we don't do docID gaps.
+//    if (prev_posting.doc_id() == curr_posting.doc_id()) {  // TODO: For when we don't do docID gaps (we always do docID gaps in such a case).
     if (curr_posting.doc_id() == 0) {
-      //a continuation of the same document
+      // A continuation of the same document.
       ++frequencies[num_docs_decoded - 1];
     } else if(num_docs_decoded == *num_docs) {
       // The posting we decoded was not a continuation of the same doc id
@@ -376,6 +390,8 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   return true;
 }
 
+// TODO: Document reordering:
+//       Sort a single list in main memory and take d-gaps (and also position gaps). Then build the index as usual.
 // TODO: This interface should be used for when the postings are not accumulated in sorted order.
 // So we'll have to assume the whole list either fits in memory, and get all the postings here and sort them in memory
 // or if we can't assume it to fit in memory (remember we're using a large memory pool for accumulating and it's not completely free'd at this point),
@@ -403,33 +419,36 @@ void TermBlock::DecodePostings(DecodedPosting* decoded_postings, int* decoded_po
 
 // Compresses posting into a static buffer and records it's length.
 void TermBlock::EncodePosting(const Posting& posting) {
-  int doc_id_gap = posting.doc_id();
-  int position_gap = posting.position();
+  compressed_tmp_posting_len = 0;
+  int encoding_offset;
 
   // If we're continuing to process the same document, can always take position deltas.
+  int position_gap = posting.position();
   if (prev_doc_id_ == posting.doc_id()) {
     position_gap -= prev_position_;
   }
   prev_position_ = posting.position();
 
-  // If the doc ids are assigned such that they are monotonically increasing, we can take doc id deltas.
-  if (kOrderedDocuments) {
+  // If the docIDs are assigned such that they are monotonically increasing, we can take docID deltas.
+  int doc_id_gap = posting.doc_id();
+  if (ordered_documents_) {
     doc_id_gap -= prev_doc_id_;
   }
   prev_doc_id_ = posting.doc_id();
 
-  compressed_tmp_posting_len = 0;
-  int encoding_offset;
-
-  // We increment all doc id gaps by 1 so they're never 0. Remember to decrement by 1 when decoding!
+  // We increment all docID gaps by 1 so they're never 0. Remember to decrement by 1 when decoding!
   Encode(doc_id_gap + 1, compressed_tmp_posting, &encoding_offset);
   compressed_tmp_posting_len += encoding_offset;
 
-  Encode(position_gap, compressed_tmp_posting + compressed_tmp_posting_len, &encoding_offset);
-  compressed_tmp_posting_len += encoding_offset;
+  if (index_positions_) {
+    Encode(position_gap, compressed_tmp_posting + compressed_tmp_posting_len, &encoding_offset);
+    compressed_tmp_posting_len += encoding_offset;
+  }
 
-  *(compressed_tmp_posting + compressed_tmp_posting_len) = posting.context();
-  ++compressed_tmp_posting_len;
+  if (index_contexts_) {
+    *(compressed_tmp_posting + compressed_tmp_posting_len) = posting.context();
+    ++compressed_tmp_posting_len;
+  }
 }
 
 // Returns true when the compressed posting was successfully inserted into the TermBlock, and false
@@ -475,7 +494,7 @@ bool TermBlock::AddCompressedPosting() {
 
     // If we require an additional block.
     if (remaining_posting_bytes > 0) {
-      //allocate a new block
+      // Allocate a new block.
       curr_block_position_ = memory_pool_manager_->AllocateBlock();
 
       assert(curr_block_position_ != NULL);  // We DumpRun() prior to avoid this exact situation.
@@ -496,7 +515,7 @@ bool TermBlock::AddCompressedPosting() {
 bool TermBlock::AddPosting(const Posting& posting) {
   EncodePosting(posting);
   // Our only assumption now is that the maximum compressed size of a single posting never exceeds the size of the memory pool.
-  assert(compressed_tmp_posting_len <= GetMemoryPoolManager().kMemoryPoolSize());
+  assert(compressed_tmp_posting_len <= GetMemoryPoolManager().kMemoryPoolSize);
   return AddCompressedPosting();
 }
 
@@ -505,18 +524,18 @@ bool TermBlock::AddPosting(const Posting& posting) {
  *
  **************************************************************************************************************************************************************/
 MemoryPoolManager::MemoryPoolManager() :
-  kMemoryPoolSize_(atoi(Configuration::GetConfiguration().GetValue("memory_pool_size").c_str())),
-      kBlockSize_(atoi(Configuration::GetConfiguration().GetValue("memory_pool_block_size").c_str())), memory_pool_(new unsigned char[kMemoryPoolSize_]),
+  kMemoryPoolSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kMemoryPoolSize).c_str())),
+      kBlockSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kMemoryPoolBlockSize).c_str())), memory_pool_(new unsigned char[kMemoryPoolSize]),
       curr_allocated_block_(memory_pool_) {
-  if (kMemoryPoolSize_ == 0) {
+  if (kMemoryPoolSize == 0) {
     GetErrorLogger().Log("Incorrect configuration value for 'memory_pool_size'", true);
   }
 
-  if (kBlockSize_ == 0) {
+  if (kBlockSize == 0) {
     GetErrorLogger().Log("Incorrect configuration value for 'memory_pool_block_size'", true);
   }
 
-  if (kMemoryPoolSize_ % kBlockSize_ != 0) {
+  if (kMemoryPoolSize % kBlockSize != 0) {
     GetErrorLogger().Log("Incorrect configuration: 'memory_pool_size' must be a multiple of 'term_block_size'", true);
   }
 
@@ -528,7 +547,7 @@ MemoryPoolManager::~MemoryPoolManager() {
 }
 
 void MemoryPoolManager::Init() {
-  memset(memory_pool_, 0, kMemoryPoolSize_);
+  memset(memory_pool_, 0, kMemoryPoolSize);
 }
 
 // Answers the question:
@@ -541,17 +560,17 @@ bool MemoryPoolManager::HaveSpace(unsigned char* curr_block_pos, int posting_len
   curr_block_pos = curr_allocated_block_;
 
   while (posting_len > 0) {
-    curr_block_pos += kBlockSize_;
-    posting_len -= kBlockSize_;
+    curr_block_pos += kBlockSize;
+    posting_len -= kBlockSize;
   }
-  return (curr_block_pos >= (memory_pool_ + kMemoryPoolSize_)) ? false : true;
+  return (curr_block_pos >= (memory_pool_ + kMemoryPoolSize)) ? false : true;
 }
 
 unsigned char* MemoryPoolManager::AllocateBlock() {
   unsigned char* curr = curr_allocated_block_;
-  curr_allocated_block_ += kBlockSize_;
+  curr_allocated_block_ += kBlockSize;
 
-  if (curr != (memory_pool_ + kMemoryPoolSize_)) {
+  if (curr != (memory_pool_ + kMemoryPoolSize)) {
     return curr;
   } else {
     return NULL;
@@ -613,15 +632,19 @@ void PostingCollectionController::InsertPosting(const Posting& posting) {
  *
  **************************************************************************************************************************************************************/
 PostingCollection::PostingCollection(int index_count, uint32_t starting_doc_id) :
-  kHashTableSize(atoi(Configuration::GetConfiguration().GetValue("hash_table_size").c_str())), term_block_table_(kHashTableSize),
-      overflow_postings_(NULL), first_doc_id_in_index_(starting_doc_id), last_doc_id_in_index_(0), num_overflow_postings_(-1), index_count_(index_count), posting_count_(0) {
-  if (kHashTableSize == 0) {
-    GetErrorLogger().Log("Incorrect configuration value for 'hash_table_size'", true);
+  kHashTableSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kHashTableSize).c_str())), term_block_table_(kHashTableSize), overflow_postings_(NULL),
+      first_doc_id_in_index_(starting_doc_id), last_doc_id_in_index_(0), num_overflow_postings_(-1), prev_doc_id_(numeric_limits<uint32_t>::max()),
+      prev_doc_length_(0), total_document_lengths_(0), total_num_docs_(0), total_unique_num_docs_(0), index_count_(index_count), posting_count_(0),
+      kOrderedDocuments(true),
+      kIndexPositions((Configuration::GetConfiguration().GetValue(config_properties::kIncludePositions) == "true") ? true : false),
+      kIndexContexts((Configuration::GetConfiguration().GetValue(config_properties::kIncludeContexts) == "true") ? true : false) {
+  if (kHashTableSize <= 0) {
+    GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kHashTableSize) + "'", true);
   }
 }
 
 PostingCollection::~PostingCollection() {
-  delete [] overflow_postings_;
+  delete[] overflow_postings_;
 }
 
 bool PostingCollection::InsertPosting(const Posting& posting) {
@@ -633,14 +656,33 @@ bool PostingCollection::InsertPosting(const Posting& posting) {
   ++num_overflow_postings_;
 
   TermBlock* curr_tb = term_block_table_.Insert(posting.term(), posting.term_len());
+  // Set these properties only on a newly created term block.
+  if (curr_tb->block_list() == NULL) {
+    curr_tb->set_ordered_documents(kOrderedDocuments);
+    curr_tb->set_index_positions(kIndexPositions);
+    curr_tb->set_index_contexts(kIndexContexts);
+  }
+
   bool status = curr_tb->AddPosting(posting);
   if (status) {
+    // Find the length of each document based on the position of the last posting from a particular docID.
+    // Also tracks the unique number of documents we have processed.
+    if (posting.doc_id() != prev_doc_id_) {
+      total_document_lengths_ += prev_doc_length_;
+      prev_doc_id_ = posting.doc_id();
+      ++total_unique_num_docs_;
+    } else {
+      prev_doc_length_ = posting.position();
+    }
     ++posting_count_;
   } else {
     // This is the leftover posting, so we won't have any same docIDs as the leftover posting in this index.
     // TODO: This assumes that the postings inserted into the index all have monotonically increasing docIDs.
     // All postings with the leftover posting docID will be saved and inserted into the index for the next run.
     last_doc_id_in_index_ = posting.doc_id() - 1;
+    if (posting.doc_id() == prev_doc_id_) {
+      --total_unique_num_docs_;
+    }
   }
 
   return status;
@@ -653,6 +695,14 @@ bool PostingCollection::InsertPosting(const Posting& posting) {
 // write out. The reason for this is to make sure that docIDs don't overlap between indices; this helps to make merging them easier.
 void PostingCollection::DumpRun(bool out_of_memory_dump) {
   GetDefaultLogger().Log("Dumping Run # " + Stringify(index_count_), false);
+
+  // Set to the range of docIDs in this index.
+  total_num_docs_ = last_doc_id_in_index_ - first_doc_id_in_index_ + 1;
+
+  if (!out_of_memory_dump) {
+    // The total document lengths must be adjusted since we never see a new docID.
+    total_document_lengths_ += prev_doc_length_;
+  }
 
   int num_term_blocks = term_block_table_.num_elements();
   TermBlock** term_blocks = new TermBlock*[num_term_blocks];
@@ -741,8 +791,8 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 
       if (have_chunk && num_docs > 0) {
         assert(num_properties > 0);
-        Chunk* chunk = new Chunk(doc_ids, frequencies, positions, contexts, num_docs, num_properties, prev_chunk_last_doc_id,
-                                 curr_term_block->OrderedDocuments());
+        Chunk* chunk = new Chunk(doc_ids, frequencies, (kIndexPositions ? positions : NULL), (kIndexContexts ? contexts : NULL), num_docs, num_properties,
+                                 prev_chunk_last_doc_id);
         prev_chunk_last_doc_id = chunk->last_doc_id();
         index_builder->Add(*chunk, curr_term_block->term(), curr_term_block->term_len());
       }
@@ -754,56 +804,85 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 
   index_builder->Finalize();
 
-  KeyValueStore index_metafile;
-  ostringstream metafile_values;
-
-  // TODO: Need to write the document offset to be used for the true docIDs in the index.
-  // This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in better compression.
-
-  metafile_values << first_doc_id_in_index_;
-  index_metafile.AddKeyValuePair("first_doc_id_in_index", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << last_doc_id_in_index_;
-  index_metafile.AddKeyValuePair("last_doc_id_in_index", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << num_term_blocks;
-  index_metafile.AddKeyValuePair("num_unique_terms", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << posting_count_;
-  index_metafile.AddKeyValuePair("posting_count", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << index_builder->total_num_block_header_bytes();
-  index_metafile.AddKeyValuePair("total_header_bytes", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << index_builder->total_num_doc_ids_bytes();
-  index_metafile.AddKeyValuePair("total_doc_id_bytes", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << index_builder->total_num_frequency_bytes();
-  index_metafile.AddKeyValuePair("total_frequency_bytes", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << index_builder->total_num_positions_bytes();
-  index_metafile.AddKeyValuePair("total_position_bytes", metafile_values.str());
-  metafile_values.str("");
-
-  metafile_values << index_builder->total_num_wasted_space_bytes();
-  index_metafile.AddKeyValuePair("total_wasted_bytes", metafile_values.str());
-  metafile_values.str("");
-
-  ostringstream meta_filename;
-  meta_filename << "index.meta.0." << index_count_;
-  index_metafile.WriteKeyValueStore(meta_filename.str().c_str());
+  WriteMetaFile(index_builder);
 
   ++index_count_;
 
   delete[] term_blocks;
   delete index_builder;
+}
+
+void PostingCollection::WriteMetaFile(IndexBuilder* index_builder) {
+  KeyValueStore index_metafile;
+  ostringstream metafile_values;
+
+  // TODO: Need to write the document offset to be used for the true docIDs in the index
+  //       (and all docIDs would need to have the 'first_doc_id_in_index_' subtracted before insertion to the memory pool).
+  //       This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in slightly better compression.
+
+  metafile_values << kIndexPositions;
+  index_metafile.AddKeyValuePair(meta_properties::kIncludesPositions, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << kIndexContexts;
+  index_metafile.AddKeyValuePair(meta_properties::kIncludesContexts, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << total_document_lengths_;
+  index_metafile.AddKeyValuePair(meta_properties::kTotalDocumentLengths, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << total_num_docs_;
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumDocs, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << total_unique_num_docs_;
+  index_metafile.AddKeyValuePair(meta_properties::kTotalUniqueNumDocs, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << first_doc_id_in_index_;
+  index_metafile.AddKeyValuePair(meta_properties::kFirstDocId, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << last_doc_id_in_index_;
+  index_metafile.AddKeyValuePair(meta_properties::kLastDocId, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << posting_count_;
+  index_metafile.AddKeyValuePair(meta_properties::kDocumentPostingCount, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->posting_count();
+  index_metafile.AddKeyValuePair(meta_properties::kIndexPostingCount, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->num_unique_terms();
+  index_metafile.AddKeyValuePair(meta_properties::kNumUniqueTerms, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->total_num_block_header_bytes();
+  index_metafile.AddKeyValuePair(meta_properties::kTotalHeaderBytes, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->total_num_doc_ids_bytes();
+  index_metafile.AddKeyValuePair(meta_properties::kTotalDocIdBytes, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->total_num_frequency_bytes();
+  index_metafile.AddKeyValuePair(meta_properties::kTotalFrequencyBytes, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->total_num_positions_bytes();
+  index_metafile.AddKeyValuePair(meta_properties::kTotalPositionBytes, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << index_builder->total_num_wasted_space_bytes();
+  index_metafile.AddKeyValuePair(meta_properties::kTotalWastedBytes, metafile_values.str());
+  metafile_values.str("");
+
+  ostringstream meta_filename;
+  meta_filename << "index.meta.0." << index_count_;
+  index_metafile.WriteKeyValueStore(meta_filename.str().c_str());
 }
 
 // TODO: If the load factor in the hash table is too high, we can dump the run to disk.
