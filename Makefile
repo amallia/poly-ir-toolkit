@@ -1,4 +1,4 @@
-CXXFLAGS =	-O2 -g -Wall -pg #-DNDEBUG
+CXXFLAGS =	-O2 -g -Wall #-DNDEBUG
 			#-Wvla : warns about variable length arrays.
 			#-DNDEBUG : defines NDEBUG to turn off assertions.
 			#-pg : enables code profiling.
@@ -44,7 +44,7 @@ LIBS =		-lpthread -lrt -lz #-lc_p #-lefence
 TARGET =	irtk
 
 $(TARGET):	$(OBJS)
-	$(CXX) -pg -o $(TARGET) $(OBJS) $(LIBS)
+	$(CXX) -o $(TARGET) $(OBJS) $(LIBS)
 	#-pg : enables code profiling.
 
 all:	$(TARGET)
