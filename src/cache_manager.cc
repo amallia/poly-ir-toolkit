@@ -50,22 +50,35 @@ using namespace std;
 
 /**************************************************************************************************************************************************************
  * CacheManager
+ *
  **************************************************************************************************************************************************************/
 const uint64_t CacheManager::kBlockSize;  // Initialized in the class definition.
+const uint64_t CacheManager::kIndexSizedCache = numeric_limits<uint64_t>::max();
 
 CacheManager::CacheManager(const char* index_filename, uint64_t cache_size) :
-  kCacheSize(cache_size), cache_block_info_(kCacheSize), index_fd_(open(index_filename, O_RDONLY)), block_cache_(new uint32_t[kBlockSize * kCacheSize / sizeof(*block_cache_)]) {
+  index_fd_(open(index_filename, O_RDONLY)), kCacheSize(cache_size == CacheManager::kIndexSizedCache ? CalculateCacheSize() : cache_size),
+      block_cache_(new uint32_t[kBlockSize * kCacheSize / sizeof(*block_cache_)]) {
   assert(kCacheSize != 0);
-
-  if (index_fd_ == -1) {
-    GetErrorLogger().LogErrno("open(), trying to open inverted index file", errno, true);
+  if (index_fd_ < 0) {
+    GetErrorLogger().LogErrno("open() in CacheManager::CacheManager(), trying to open index file", errno, true);
   }
 }
 
 CacheManager::~CacheManager() {
   int close_ret = close(index_fd_);
-  assert(close_ret != -1);
+  if (index_fd_ < 0) {
+    GetErrorLogger().LogErrno("close() in CacheManager::~CacheManager(), trying to close index file", errno, false);
+  }
   delete[] block_cache_;
+}
+
+uint64_t CacheManager::CalculateCacheSize() const {
+  struct stat stat_buf;
+  if (fstat(index_fd_, &stat_buf) < 0) {
+    GetErrorLogger().LogErrno("fstat() in CacheManager::CalculateCacheSize()", errno, true);
+  }
+  assert(stat_buf.st_size % kBlockSize == 0);
+  return stat_buf.st_size / kBlockSize;
 }
 
 /**************************************************************************************************************************************************************
@@ -76,7 +89,7 @@ CacheManager::~CacheManager() {
  * Thus all queued blocks are pinned.  They will all have to be freed by the caller.
  **************************************************************************************************************************************************************/
 LruCachePolicy::LruCachePolicy(const char* index_filename) :
-  CacheManager(index_filename, atol(Configuration::GetConfiguration().GetValue(config_properties::kBlockCacheSize).c_str())) {
+  CacheManager(index_filename, atol(Configuration::GetConfiguration().GetValue(config_properties::kBlockCacheSize).c_str())), cache_block_info_(kCacheSize) {
   pthread_mutex_init(&query_mutex_, NULL);
 
   for (uint64_t i = 0; i < kCacheSize; ++i) {
@@ -94,8 +107,11 @@ LruCachePolicy::~LruCachePolicy() {
 // If the block num we're looking for is not in the cache, we know that it is in a ready state because it either had its aio request previously canceled,
 // or it has completed its aio request, or it never had any aio requests associated with it.
 // If the block is already in the cache, some previous request must have queued it, and we'll deal with it when we actually get the block.
-void LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
+// Returns the number of blocks that had to be read in from the disk.
+int LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
   pthread_mutex_lock(&query_mutex_);  // Lock the mutex because we don't want 'cache_map_' to be read while it's being modified.
+
+  int num_disk_blocks = 0;  // Tracks the number of blocks requested to be loaded from disk.
 
   struct aiocb* aiocb_list[ending_block_num - starting_block_num];  // Variable length array here.
   int curr_aiocb_list_item = 0;
@@ -155,6 +171,8 @@ void LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_bl
       curr_aiocb->aio_sigevent.sigev_notify = SIGEV_NONE;
 
       aiocb_list[curr_aiocb_list_item++] = curr_aiocb;
+
+      ++num_disk_blocks;
     } else {
       // Since we're accessing a block, need to move it to the back of the LRU list.
       int cache_block = MoveToBack(cache_map_[block_num], block_num)->first;
@@ -168,6 +186,8 @@ void LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_bl
 
   int lio_listio_ret = lio_listio(LIO_NOWAIT, aiocb_list, curr_aiocb_list_item, NULL);
   assert(lio_listio_ret == 0);
+
+  return num_disk_blocks;
 }
 
 // Assumes that 'block_num' has been previously queued by a call to QueueBlocks().
@@ -259,10 +279,44 @@ void MergingCachePolicy::FillCache(uint64_t block_num) {
   initial_cache_block_num_ = block_num;
 }
 
-void MergingCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
+// Returns the number of blocks read in from the disk (all of them).
+int MergingCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
   // Nothing to be done when merging.
+  return ending_block_num - starting_block_num;
 }
 
 void MergingCachePolicy::FreeBlock(uint64_t block_num) {
   // Nothing to be done when merging.
+}
+
+/**************************************************************************************************************************************************************
+ * FullContiguousCachePolicy
+ *
+ **************************************************************************************************************************************************************/
+FullContiguousCachePolicy::FullContiguousCachePolicy(const char* index_filename) :
+  CacheManager(index_filename, CacheManager::kIndexSizedCache) {
+  FillCache();
+}
+
+FullContiguousCachePolicy::~FullContiguousCachePolicy() {
+}
+
+uint32_t* FullContiguousCachePolicy::GetBlock(uint64_t block_num) {
+  return block_cache_ + (block_num * (kBlockSize / sizeof(*block_cache_)));
+}
+
+void FullContiguousCachePolicy::FillCache() {
+  int read_ret = read(index_fd_, block_cache_, kBlockSize * kCacheSize);
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in FullContiguousCachePolicy::FillCache()", errno, true);
+  }
+  assert(static_cast<uint64_t> (read_ret) == kBlockSize * kCacheSize);
+}
+
+// Returns the number of blocks read in from the disk (all of them).
+int FullContiguousCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
+  return ending_block_num - starting_block_num;
+}
+
+void FullContiguousCachePolicy::FreeBlock(uint64_t block_num) {
 }

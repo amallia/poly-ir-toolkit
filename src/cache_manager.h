@@ -26,6 +26,9 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
+// TODO: Might be useful to implement a "fragmented cache policy", where the memory is allocated in chunks instead of one contiguous piece. Could be useful if
+//       the memory is fragmented and the system can't allocate such a large contiguous chunk of memory. Would require keeping an array with pointers to each
+//       allocated chunk of memory (assuming each chunk fits the same number of blocks).
 //==============================================================================================================================================================
 
 #ifndef CACHE_MANAGER_H_
@@ -36,6 +39,7 @@
 #include <stdint.h>
 
 #include <algorithm>
+#include <limits>
 #include <list>
 #include <map>
 #include <string>
@@ -172,23 +176,22 @@ public:
   CacheManager(const char* index_filename, uint64_t cache_size);
   virtual ~CacheManager();
 
-  virtual void QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) = 0;
+  virtual int QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) = 0;
 
   virtual uint32_t* GetBlock(uint64_t block_num) = 0;
 
   virtual void FreeBlock(uint64_t block_num) = 0;
 
-protected:
   static const uint64_t kBlockSize = BLOCK_SIZE;  // The block size in number of bytes.
 
-  const uint64_t kCacheSize;
-
-  CacheBlockInfo cache_block_info_;
-
-  // File descriptor for the inverted index file.
-  int index_fd_;
-  // Pointer to the memory allocated for the block cache.
-  uint32_t* block_cache_;
+protected:
+  static const uint64_t kIndexSizedCache;  // Sentinel value that when passed into the constructor as the 'cache_size' parameter, will cause the cache manager
+                                           // to allocate as much space for the cache as there are blocks in the whole index.
+  const int index_fd_;                     // File descriptor for the inverted index file.
+  const uint64_t kCacheSize;               // Size of this cache in number of blocks.
+  uint32_t* block_cache_;                  // Pointer to the memory allocated for the block cache.
+private:
+  uint64_t CalculateCacheSize() const;
 };
 
 /**************************************************************************************************************************************************************
@@ -201,7 +204,7 @@ public:
   LruCachePolicy(const char* index_filename);
   ~LruCachePolicy();
 
-  void QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num);
+  int QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num);
 
   uint32_t* GetBlock(uint64_t block_num);
 
@@ -218,6 +221,8 @@ private:
   // and updates the cache map for 'block_num' to point to the new iterator.
   // Returns the new iterator to the last element in the list.
   LruList::iterator MoveToBack(LruList::iterator lru_list_itr, uint64_t block_num);
+
+  CacheBlockInfo cache_block_info_;
 
   // Access to the block cache must be concurrent safe.
   pthread_mutex_t query_mutex_;
@@ -241,7 +246,7 @@ public:
   MergingCachePolicy(const char* index_filename);
   ~MergingCachePolicy();
 
-  void QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num);
+  int QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num);
 
   uint32_t* GetBlock(uint64_t block_num);
 
@@ -251,6 +256,27 @@ private:
   void FillCache(uint64_t block_num);
 
   uint64_t initial_cache_block_num_;
+};
+
+/**************************************************************************************************************************************************************
+ * FullContiguousCachePolicy
+ *
+ * Loads the full index into a contiguous block of main memory. Eliminates the overheads associated with various caching policies
+ * (assuming you have enough main memory).
+ **************************************************************************************************************************************************************/
+class FullContiguousCachePolicy : public CacheManager {
+public:
+  FullContiguousCachePolicy(const char* index_filename);
+  ~FullContiguousCachePolicy();
+
+  int QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num);
+
+  uint32_t* GetBlock(uint64_t block_num);
+
+  void FreeBlock(uint64_t block_num);
+
+private:
+  void FillCache();
 };
 
 #endif /* CACHE_MANAGER_H_ */
