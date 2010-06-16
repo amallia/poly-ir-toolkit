@@ -66,7 +66,7 @@ CacheManager::CacheManager(const char* index_filename, uint64_t cache_size) :
 
 CacheManager::~CacheManager() {
   int close_ret = close(index_fd_);
-  if (index_fd_ < 0) {
+  if (close_ret < 0) {
     GetErrorLogger().LogErrno("close() in CacheManager::~CacheManager(), trying to close index file", errno, false);
   }
   delete[] block_cache_;
