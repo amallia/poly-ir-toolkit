@@ -409,6 +409,6 @@ void TestCoder(char* coder_type) {
     null_coding null_coder;
     TestCoding(&null_coder);
   } else {
-    fprintf(stderr, "No such coding.\nValid options are 'rice', 'turbo-rice', 'pfor', 's9', 's16', 'vbyte', 'null'.\n");
+    fprintf(stderr, "No such coding.\nValid options are 'rice', 'turbo-rice', 'pfor', 's9', 's16', 'vbyte', or 'null'.\n");
   }
 }

@@ -68,6 +68,9 @@ static const char kDeleteMergedFiles[] = "delete_merged_files";
  * Querying Parameters
  *
  **************************************************************************************************************************************************************/
+// Sets whether the whole index will be read into main memory. If true, the 'block_cache_size' and 'read_ahead_blocks' options are ignored.
+static const char kMemoryResidentIndex[] = "memory_resident_index";
+
 // The number of blocks to cache in memory.
 static const char kBlockCacheSize[] = "block_cache_size";
 

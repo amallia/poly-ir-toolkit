@@ -32,13 +32,25 @@
 using namespace std;
 
 Timer::Timer() {
-  gettimeofday(&start_time_, NULL);
+  start_time_std_ = clock();
+  gettimeofday(&start_time_sys_, NULL);
 }
 
 double Timer::GetElapsedTime() {
-  timeval stop, res;
-  gettimeofday(&stop, NULL);
-  timersub(&stop, &start_time_, &res);
-  double time_diff = res.tv_sec + res.tv_usec / 1000000.0;  // 10^6 usec per second.
+  return GetElapsedTimeSys();
+}
+
+double Timer::GetElapsedTimeStd() {
+  clock_t stop_time_std;
+  stop_time_std = clock();
+  double time_diff = static_cast<double> (stop_time_std - start_time_std_) / CLOCKS_PER_SEC;
+  return time_diff;
+}
+
+double Timer::GetElapsedTimeSys() {
+  timeval stop_time_sys, time_diff_sys;
+  gettimeofday(&stop_time_sys, NULL);
+  timersub(&stop_time_sys, &start_time_sys_, &time_diff_sys);
+  double time_diff = time_diff_sys.tv_sec + time_diff_sys.tv_usec / 1000000.0;  // 10^6 usec per second.
   return time_diff;
 }

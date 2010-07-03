@@ -615,7 +615,8 @@ void PostingCollectionController::InsertPosting(const Posting& posting) {
     if (overflow_postings.postings() != NULL && overflow_postings.num_postings() > 0) {
       for (int i = 0; i < overflow_postings.num_postings(); ++i) {
         bool status = new_posting_collection->InsertPosting(overflow_postings.postings()[i]);
-        assert(status == true);
+        if (!status)
+          assert(false);
       }
     }
 

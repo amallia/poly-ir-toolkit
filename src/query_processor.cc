@@ -38,6 +38,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include <algorithm>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -57,10 +58,13 @@ using namespace std;
  **************************************************************************************************************************************************************/
 QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
                                QueryFormat query_format) :
-  kMaxNumberResults(atol(Configuration::GetConfiguration().GetValue(config_properties::kMaxNumberResults).c_str())), result_format_(kNormal),
-      query_format_(query_format), cache_policy_(index_filename), index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, cache_policy_,
-                                                                                lexicon_filename, doc_map_filename, meta_info_filename),
-      collection_average_doc_len_(0), collection_total_num_docs_(0), use_positions_(false) {
+      kMaxNumberResults(atol(Configuration::GetConfiguration().GetValue(config_properties::kMaxNumberResults).c_str())),
+      result_format_(kNormal), query_format_(query_format),
+      cache_policy_(((Configuration::GetConfiguration().GetValue(config_properties::kMemoryResidentIndex) == "true") ? static_cast<CacheManager*>(new FullContiguousCachePolicy(index_filename))
+                                                                                                                     : static_cast<CacheManager*>(new LruCachePolicy(index_filename)))),
+      index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, *cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename),
+      collection_average_doc_len_(0), collection_total_num_docs_(0), use_positions_(false), silent_mode_(false), warm_up_mode_(false), total_querying_time_(0),
+      total_num_queries_(0), kInitialQuerySize(32), query_size_(kInitialQuerySize), f_d_t_(new uint32_t[query_size_]) {
   if (kMaxNumberResults <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kMaxNumberResults) + "'", true);
   }
@@ -80,6 +84,25 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
       assert(false);
       break;
   }
+
+  // Output some querying statistics.
+  double total_cached_bytes_read = index_reader_.total_cached_bytes_read();
+  double total_disk_bytes_read = index_reader_.total_disk_bytes_read();
+  double total_num_queries_issued = total_num_queries_;
+
+  cout << "Number of queries executed: " << total_num_queries_issued << endl;
+  cout << "Total querying time: " << total_querying_time_ << " seconds\n";
+
+  cout << "\n";
+  cout << "Per Query Statistics:\n";
+  cout << "  Average data read from cache: " << (total_cached_bytes_read / total_num_queries_issued / (1 << 20)) << " MiB\n";
+  cout << "  Average data read from disk: " << (total_disk_bytes_read / total_num_queries_issued / (1 << 20)) << " MiB\n";
+
+  cout << "  Average query running time (latency): " << (total_querying_time_ / total_num_queries_issued * (1000)) << " ms\n";
+}
+
+QueryProcessor::~QueryProcessor() {
+  delete cache_policy_;
 }
 
 void QueryProcessor::AcceptQuery() {
@@ -87,9 +110,13 @@ void QueryProcessor::AcceptQuery() {
     cout << "Search: ";
     string queryLine;
     getline(cin, queryLine);
+
+    if (cin.eof())
+      break;
+
     ExecuteQuery(queryLine, 0);
 
-    if(query_format_ != kInteractive)
+    if (query_format_ != kInteractive)
       break;
   }
 }
@@ -124,11 +151,14 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
     lp[i] = index_reader_.OpenList(*q[i]);
   }
 
+  uint32_t* f_d_t = new uint32_t[q.size()];
+
+  float min_doc_score = numeric_limits<float>::max();  // TODO: For using an array instead of a heap.
+
   uint32_t did = 0;
   while (did < numeric_limits<uint32_t>::max()) {
     // Get next element from shortest list.
     did = index_reader_.NextGEQ(lp[0], did);
-
     if (did == numeric_limits<uint32_t>::max())
       break;
 
@@ -144,13 +174,12 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
     } else {
       assert(d == did);
 
-      uint32_t* f_d_t = new uint32_t[q.size()];
       // Doc id is in intersection, now get all frequencies.
       for (size_t i = 0; i < q.size(); ++i) {
         f_d_t[i] = index_reader_.GetFreq(lp[i], did);  // This is the frequency that a term appeared in the document.
       }
 
-      // Compute contribution from proximity info.
+/*      // Compute contribution from proximity info.
       float* acc_t = new float[q.size()];
       for (size_t i = 0; i < q.size(); ++i) {
         acc_t[i] = 0.0;
@@ -158,19 +187,19 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
 
       if (use_positions_) {
         for (size_t i = 0; i < q.size(); ++i) {
-          DecodedChunk* decoded_chunk_top = lp[i]->curr_block()->GetCurrChunk();
-          const uint32_t* positions_top = decoded_chunk_top->GetCurrentPositions();
+          ChunkDecoder* decoded_chunk_top = lp[i]->curr_block_decoder()->curr_chunk_decoder();
+          const uint32_t* positions_top = decoded_chunk_top->current_positions();
 
           for (size_t j = i + 1; j < q.size(); ++j) {
-            DecodedChunk* decoded_chunk_bottom = lp[j]->curr_block()->GetCurrChunk();
-            const uint32_t* positions_bottom = decoded_chunk_bottom->GetCurrentPositions();
+            ChunkDecoder* decoded_chunk_bottom = lp[j]->curr_block_decoder()->curr_chunk_decoder();
+            const uint32_t* positions_bottom = decoded_chunk_bottom->current_positions();
 
             uint32_t positions_top_actual = 0; // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
-            for (uint32_t k = 0; k < decoded_chunk_top->GetCurrentFrequency(); ++k) {
+            for (uint32_t k = 0; k < decoded_chunk_top->current_frequency(); ++k) {
               positions_top_actual += positions_top[k];
 
               uint32_t positions_bottom_actual = 0; // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
-              for (size_t l = 0; l < decoded_chunk_bottom->GetCurrentFrequency(); ++l) {
+              for (size_t l = 0; l < decoded_chunk_bottom->current_frequency(); ++l) {
                 positions_bottom_actual += positions_bottom[l];
 
                 int dist = positions_top_actual - positions_bottom_actual;
@@ -188,9 +217,10 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
           }
         }
       }
-
+*/
       // Compute BM25 score from frequencies.
       float bm_25_sum = 0;
+
       for (size_t i = 0; i < q.size(); ++i) {
         int f_t = q[i]->num_docs();
         float K = 1.2 * ((1 - 0.75) + 0.75 * (index_reader_.GetDocLen(did) / collection_average_doc_len_));
@@ -199,20 +229,60 @@ int QueryProcessor::ProcessQuery(vector<string>& words, Results& results) {
         bm_25_sum += w_t * (((1.2 + 1) * f_d_t[i]) / (K + f_d_t[i]));
 
         // Add the proximity stuff.
-        bm_25_sum += min(1.0f, w_t) * (acc_t[i] * (1.2 + 1) / (acc_t[i] + K));
+//        bm_25_sum += min(1.0f, w_t) * (acc_t[i] * (1.2 + 1) / (acc_t[i] + K));
       }
 
-      delete[] f_d_t;
-      delete[] acc_t;
+//      bm_25_sum = 0; // TODO: This tests what contribution to the running time the heap makes...as this will cause most stuff to skip the heap.
 
-      results.push(make_pair(bm_25_sum, did));
-      if (results.size() > static_cast<size_t> (kMaxNumberResults)) {
-        results.pop();
+      // TODO: Try using an array instead of a heap. Have to search it, but good cache performance.
+      if (total_num_results < kMaxNumberResults) {
+        results[total_num_results] = make_pair(bm_25_sum, did);
+        if (bm_25_sum < min_doc_score) {
+          min_doc_score = bm_25_sum;
+        }
+      } else if (bm_25_sum > min_doc_score) {
+        bool replaced = false;
+        bool update_min_score = true;
+        float curr_min_score = numeric_limits<float>::max();
+
+        for (int i = 0; i < kMaxNumberResults; ++i) {
+          if (!replaced && bm_25_sum < results[i].first) {
+            results[i] = make_pair(bm_25_sum, did);
+            update_min_score = false;  // We haven't changed the min score.
+            break;
+          }
+
+          if(!replaced && min_doc_score == results[i].first) {
+            results[i] = make_pair(bm_25_sum, did);
+            replaced = true;
+          }
+
+          if(results[i].first < curr_min_score) {
+            curr_min_score = results[i].first;
+          }
+        }
+
+        if(update_min_score) {
+          min_doc_score = curr_min_score;
+        }
       }
+
+      // TODO: Only insert if the score is greater than the minimum element in the heap.
+      // TODO: Should be OR instead of AND.
+//      if (results.size() < static_cast<size_t> (kMaxNumberResults) || bm_25_sum > results.top().first) {
+//        results.push(make_pair(bm_25_sum, did));
+//        if (results.size() > static_cast<size_t> (kMaxNumberResults)) {
+//          results.pop();
+//        }
+//      }
+
       ++total_num_results;
       ++did;  // Increase did to search for next doc id.
     }
   }
+
+  delete[] f_d_t;
+//  delete[] acc_t;
 
   for (size_t i = 0; i < q.size(); ++i) {
     index_reader_.CloseList(lp[i]);
@@ -229,10 +299,9 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   }
 
   if(query_format_ == kBatch) {
-    cout << "\nSearch: " << query_line << endl;
+    if(!silent_mode_)
+      cout << "\nSearch: " << query_line << endl;
   }
-
-  Timer query_time;  // Time how long it takes to answer a query.
 
   istringstream qss(query_line);
   vector<string> words;
@@ -242,30 +311,49 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   }
 
   if (words.size() == 0) {
-    cout << "Please enter a query.\n" << endl;
+    if(!silent_mode_)
+      cout << "Please enter a query.\n" << endl;
     return;
   }
 
+  Timer query_time;  // Time how long it takes to answer a query.
+
   // These results are ranked from lowest BM25 score to highest.
-  Results ranked_results;
+//  Results ranked_results;
+  Results ranked_results = new Result[kMaxNumberResults];
   int total_num_results = ProcessQuery(words, ranked_results);
 
-  size_t results_size = ranked_results.size();
-  Result* top_results = new Result[results_size];
+  double query_elapsed_time = query_time.GetElapsedTime();
 
-  for (size_t i = 0; i < results_size; ++i) {
-    top_results[results_size - i - 1] = ranked_results.top();
-    ranked_results.pop();
+  if(!warm_up_mode_) {
+    total_querying_time_ += query_elapsed_time;
+    ++total_num_queries_;
   }
+
+  // TODO: For the array based method:
+  size_t results_size = kMaxNumberResults;
+  Result* top_results = ranked_results;
+
+
+  // TODO: For the heap based method.
+//  size_t results_size = ranked_results.size();
+//  Result* top_results = new Result[results_size];
+
+//  for (size_t i = 0; i < results_size; ++i) {
+//    top_results[results_size - i - 1] = ranked_results.top();
+//    ranked_results.pop();
+//  }
 
   for (size_t i = 0; i < results_size; ++i) {
     switch (result_format_) {
       case kNormal:
-        cout << setprecision(4) << setw(4) << "Score: " << top_results[i].first << "\tDocID: " << top_results[i].second << "\tURL: "
-            << index_reader_.GetDocUrl(top_results[i].second) << "\n";
+        if(!silent_mode_)
+          cout << setprecision(4) << setw(4) << "Score: " << top_results[i].first << "\tDocID: " << top_results[i].second << "\tURL: "
+              << index_reader_.GetDocUrl(top_results[i].second) << "\n";
         break;
       case kTrec:
-        cout << qid << '\t' << "Q0" << '\t' << index_reader_.GetDocUrl(top_results[i].second) << '\t' << i << '\t' << top_results[i].first << '\t' << "STANDARD" << "\n";
+        if(!silent_mode_)
+          cout << qid << '\t' << "Q0" << '\t' << index_reader_.GetDocUrl(top_results[i].second) << '\t' << i << '\t' << top_results[i].first << '\t' << "STANDARD" << "\n";
         break;
       default:
         assert(false);
@@ -274,19 +362,43 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   delete[] top_results;
 
   if (result_format_ == kNormal)
-    cout << "\nShowing " << results_size << " results out of " << total_num_results << ". (" << query_time.GetElapsedTime() << " seconds)\n";
+    if(!silent_mode_)
+      cout << "\nShowing " << results_size << " results out of " << total_num_results << ". (" << query_elapsed_time << " seconds)\n";
 }
 
 void QueryProcessor::RunBatchQueries(istream& is) {
+  // The percentage of total batch queries to use to generate statistics.
+  // The rest of the queries will be used to warm up the cache.
+  const float kPercentageTestQueries = 0.01f;
+
+  vector<string> queries;
   string query_line;
   while (getline(is, query_line)) {
     size_t colon_pos = query_line.find(':');
     if (colon_pos != string::npos && colon_pos < (query_line.size() - 1)) {
-      string query = query_line.substr(colon_pos + 1);
-      ExecuteQuery(query, 0);
+      queries.push_back(query_line.substr(colon_pos + 1));
     } else {
-      ExecuteQuery(query_line, 0);
+      queries.push_back(query_line);
     }
+  }
+
+  random_shuffle(queries.begin(), queries.end());
+
+  int num_test_queries = ceil(kPercentageTestQueries * queries.size());
+  int num_warm_up_queries = queries.size() - num_test_queries;
+
+  silent_mode_ = true;
+  warm_up_mode_ = true;
+  for (int i = 0; i < num_warm_up_queries; ++i) {
+    ExecuteQuery(queries[i], 0);
+  }
+
+  index_reader_.ResetStats();
+
+  silent_mode_ = false;
+  warm_up_mode_ = false;
+  for (int i = num_warm_up_queries; i < static_cast<int> (queries.size()); ++i) {
+    ExecuteQuery(queries[i], 0);
   }
 }
 
@@ -301,7 +413,11 @@ void QueryProcessor::LoadIndexProperties() {
     GetErrorLogger().Log("The '" + string(meta_properties::kTotalDocumentLengths) + "' value in the loaded index meta file seems to be incorrect.", false);
   }
 
-  collection_average_doc_len_ = collection_total_document_lengths / collection_total_num_docs_;
+  if (collection_total_num_docs_ <= 0 || collection_total_document_lengths <= 0) {
+    collection_average_doc_len_ = 1;
+  } else {
+    collection_average_doc_len_ = collection_total_document_lengths / collection_total_num_docs_;
+  }
 
   // Default is not to use positions.
   if (index_reader_.includes_positions()) {

@@ -23,14 +23,12 @@
 // OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//==============================================================================
+//==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// Class used for logging. Thread safe through pthread mutexes.
-// Logger objects can be created in debug mode; in this case DebugLog() can be
-// used to output messages, but these calls should be optimized away when a
-// Logger is not created in debug mode.
-//==============================================================================
+// Class used for logging. Thread safe through pthread mutexes. Logger objects can be created in debug mode; in this case DebugLog() can be used to output
+// messages, but these calls should be optimized away when a Logger is not created in debug mode.
+//==============================================================================================================================================================
 
 #ifndef LOGGER_H_
 #define LOGGER_H_

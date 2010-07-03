@@ -68,6 +68,16 @@ IndexFiles::IndexFiles(int group_num, int file_num) {
   meta_info_filename_ = meta_info_filename.str();
 }
 
+// 'dir' is expected to be a directory path that does not end with a "/",
+// except in the case where it is the root directory.
+void IndexFiles::SetDirectory(const string& dir) {
+  string separator = (dir == "/") ? "" : "/";
+  index_filename_ = dir + separator + index_filename_;
+  lexicon_filename_ = dir + separator + lexicon_filename_;
+  document_map_filename_ = dir + separator + document_map_filename_;
+  meta_info_filename_ = dir + separator + meta_info_filename_;
+}
+
 /**************************************************************************************************************************************************************
  * Index
  *

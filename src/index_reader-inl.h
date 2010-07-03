@@ -26,20 +26,11 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
+// Definitions of some of the longer inline functions for the index reader. These functions get called a lot, making them inline makes a measurable difference.
 //==============================================================================================================================================================
 
-#include "logger.h"
-using namespace std;
+#ifndef INDEX_READERINL_H_
+#define INDEX_READERINL_H_
 
-void Cleanup() {
-}
 
-logger::Logger& GetDefaultLogger() {
-  static logger::Logger default_logger(STDOUT_FILENO, true, NULL);  // Default Logger going to cout.
-  return default_logger;
-}
-
-logger::Logger& GetErrorLogger() {
-  static logger::Logger error_logger(STDERR_FILENO, true, Cleanup);  // Error Logger going to cerr.
-  return error_logger;
-}
+#endif /* INDEX_READERINL_H_ */

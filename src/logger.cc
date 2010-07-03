@@ -23,14 +23,12 @@
 // OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
 // ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-//==============================================================================
+//==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// Multiple Logger objects used by multiple threads logging to the same file
-// descriptor are allowed; they will not cause race conditions, since each
-// unique file descriptor maps to the same mutex lock. However, there should be
-// no race conditions when initializing Logger objects!
-//==============================================================================
+// Multiple Logger objects used by multiple threads logging to the same file descriptor are allowed; they will not cause race conditions, since each unique file
+// descriptor maps to the same mutex lock. However, there should be no race conditions when initializing Logger objects!
+//==============================================================================================================================================================
 
 #include "logger.h"
 
@@ -58,12 +56,12 @@ Logger::Logger(int fd, bool debug, void(*cleanup_handler)(void)) :
 }
 
 Logger::~Logger() {
-  vector<std::pair<int, pthread_mutex_t*> >& fd_lock_mapping =
-      Logger::fd_lock_mapping_;
+  vector<std::pair<int, pthread_mutex_t*> >& fd_lock_mapping = Logger::fd_lock_mapping_;
   for (size_t i = 0; i < fd_lock_mapping.size(); ++i) {
     pthread_mutex_destroy(fd_lock_mapping[i].second);
     delete fd_lock_mapping[i].second;
   }
+  fd_lock_mapping.clear();
 }
 
 void Logger::Log(const string& message, bool fatal_error) {
@@ -73,16 +71,15 @@ void Logger::Log(const string& message, bool fatal_error) {
     pthread_mutex_lock(logger_lock);
 
     string write_message = timestamp + message + "\n";
-    if (write(fd_, write_message.c_str(), write_message.length()) == -1) {
+    if (write(fd_, write_message.c_str(), write_message.length()) < 0) {
       string err_message = "Logger could not write() to fd " + Stringify(fd_);
       perror(err_message.c_str());
     }
 
     if (fatal_error) {
       const char kExitMessage[] = "Exiting.\n";
-      if (write(fd_, kExitMessage, strlen(kExitMessage)) == -1) {
-        string err_message = "Logger could not write() to fd "
-            + Stringify(fd_);
+      if (write(fd_, kExitMessage, strlen(kExitMessage)) < 0) {
+        string err_message = "Logger could not write() to fd " + Stringify(fd_);
         perror(err_message.c_str());
       }
 
@@ -121,7 +118,7 @@ void Logger::DebugLog(const string& message) {
 
 string Logger::GetTimestamp() {
   const char kTimeFormat[] = "[%Y-%m-%d %H:%M:%S] ";
-  const int kTimeSize = 23;  // Custom fit for our time format.
+  const int kTimeSize = 23;  // Custom fit for the time format.
 
   time_t rawtime;
   struct tm timestamp;
@@ -136,8 +133,7 @@ string Logger::GetTimestamp() {
 }
 
 pthread_mutex_t* Logger::FindFdLock(int fd) {
-  vector<std::pair<int, pthread_mutex_t*> >& fd_lock_mapping =
-      Logger::fd_lock_mapping_;
+  vector<std::pair<int, pthread_mutex_t*> >& fd_lock_mapping = Logger::fd_lock_mapping_;
   for (size_t i = 0; i < fd_lock_mapping.size(); ++i) {
     if (fd == fd_lock_mapping[i].first)
       return fd_lock_mapping[i].second;

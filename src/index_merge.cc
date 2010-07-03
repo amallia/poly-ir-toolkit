@@ -27,13 +27,13 @@
 // Author(s): Roman Khmelichek
 //
 // TODO: It will be useful to also merge positions. This happens when indices have overlapping docIDs, such as when combining versioned collections or in recrawling, etc.
-// This would makes it more flexible.
+//       This would makes it more flexible.
 //
 // TODO: Merging Optimizations: Think about cases where we don't need to decompress chunks, and simply copy them to save time. Will need interfaces for this at index reader level.
-// * When a term appears in only one of the indices being merged, we can simply "copy" certain blocks into the new index.
-//   (The first and last blocks will need to be decompressed and reconstructed due to other lists that need to be contained in the blocks).
-// * When merging indices where you know that docIDs are strictly increasing, and there is no overlap, probably don't have to decompress chunks.
-// * Can specialize merging for say, 2 indices, where you don't have to use a heap.
+//       * When a term appears in only one of the indices being merged, we can simply "copy" certain blocks into the new index.
+//         (The first and last blocks will need to be decompressed and reconstructed due to other lists that need to be contained in the blocks).
+//       * When merging indices where you know that docIDs are strictly increasing, and there is no overlap, probably don't have to decompress chunks.
+//       * Can specialize merging for say, 2 indices, where you don't have to use a heap.
 //==============================================================================================================================================================
 
 #include "index_merge.h"
@@ -43,8 +43,6 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-
-#include <iostream>
 
 #include "globals.h"
 #include "index_build.h"
@@ -81,35 +79,35 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
     if (total_num_docs.size() > 0) {
       total_num_docs_ += atol(total_num_docs.c_str());
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kTotalNumDocs) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kTotalNumDocs) + "' value.", false);
     }
 
     string total_unique_num_docs = index_reader->meta_info().GetValue(meta_properties::kTotalUniqueNumDocs);
     if (total_unique_num_docs.size() > 0) {
       total_unique_num_docs_ += atol(total_unique_num_docs.c_str());
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kTotalUniqueNumDocs) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kTotalUniqueNumDocs) + "' value.", false);
     }
 
     string total_document_lengths = index_reader->meta_info().GetValue(meta_properties::kTotalDocumentLengths);
     if (total_document_lengths.size() > 0) {
       total_document_lengths_ += atol(total_document_lengths.c_str());
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kTotalDocumentLengths) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kTotalDocumentLengths) + "' value.", false);
     }
 
     string document_posting_count = index_reader->meta_info().GetValue(meta_properties::kDocumentPostingCount);
     if (document_posting_count.size() > 0) {
       document_posting_count_ += atol(document_posting_count.c_str());
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kDocumentPostingCount) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kDocumentPostingCount) + "' value.", false);
     }
 
     string index_posting_count = index_reader->meta_info().GetValue(meta_properties::kIndexPostingCount);
     if (index_posting_count.size() > 0) {
       index_posting_count_ += atol(index_posting_count.c_str());
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kIndexPostingCount) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kIndexPostingCount) + "' value.", false);
     }
 
     string first_doc_id_in_index = index_reader->meta_info().GetValue(meta_properties::kFirstDocId);
@@ -118,7 +116,7 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
       if (doc_id < first_doc_id_in_index_)
         first_doc_id_in_index_ = doc_id;
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kFirstDocId) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kFirstDocId) + "' value.", false);
     }
 
     string last_doc_id_in_index = index_reader->meta_info().GetValue(meta_properties::kLastDocId);
@@ -127,18 +125,12 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
       if (doc_id > last_doc_id_in_index_)
         last_doc_id_in_index_ = doc_id;
     } else {
-      GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kLastDocId) + "' value.", false);
+      GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kLastDocId) + "' value.", false);
     }
 
     Index* index = new Index(cache_policy, index_reader);
     indices_.push_back(index);
   }
-
-  Merge();
-  index_builder_->Finalize();
-  WriteMetaFile();
-
-  GetDefaultLogger().Log("Finished merging.", false);
 }
 
 IndexMerger::~IndexMerger() {
@@ -149,9 +141,14 @@ IndexMerger::~IndexMerger() {
 }
 
 // TODO: MergeOneHeap() algorithm seems slower than MergeTwoHeaps(). But what about on very long lists?
-void IndexMerger::Merge() {
+void IndexMerger::StartMerge() {
   MergeOneHeap();
 //  MergeTwoHeaps();
+
+  index_builder_->Finalize();
+  WriteMetaFile();
+
+  GetDefaultLogger().Log("Finished merging.", false);
 }
 
 void IndexMerger::MergeOneHeap() {
@@ -191,7 +188,7 @@ void IndexMerger::MergeOneHeap() {
       uint32_t curr_frequency = top_list->index_reader()->GetFreq(top_list->curr_list_data(), top_list->curr_doc_id());
 
       if (includes_positions_) {
-        const uint32_t* curr_positions = top_list->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
+        const uint32_t* curr_positions = top_list->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
         // Copy the positions.
         for (size_t i = 0; i < curr_frequency; ++i) {
           positions[properties_offset + i] = curr_positions[i];
@@ -199,8 +196,7 @@ void IndexMerger::MergeOneHeap() {
       }
 
       doc_ids[doc_ids_offset] = top_list->curr_doc_id() - prev_doc_id;
-      // Check for duplicate doc ids (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero),
-      // which is considered a bug.
+      // Check for duplicate doc ids (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero), which is considered a bug.
       // But since 'prev_doc_id' is initialized to 0, which is a valid doc,
       // we have a case where the 'top_list->curr_doc_id()' could start from 0, which is an exception to the rule.
       // Thus, if this is the first iteration and 'top_list->curr_doc_id()' is 0, it is an acceptable case.
@@ -344,7 +340,7 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
 
     uint32_t curr_frequency = top_list->index_reader()->GetFreq(top_list->curr_list_data(), top_list->curr_doc_id());
     if (includes_positions_) {
-      const uint32_t* curr_positions = top_list->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
+      const uint32_t* curr_positions = top_list->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
       // Copy the positions.
       for (size_t i = 0; i < curr_frequency; ++i) {
         positions[properties_offset + i] = curr_positions[i];
@@ -352,8 +348,7 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
     }
 
     doc_ids[doc_ids_offset] = top_list->curr_doc_id() - prev_doc_id;
-    // Check for duplicate doc ids (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero),
-    // which is considered a bug.
+    // Check for duplicate doc ids (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero), which is considered a bug.
     // But since 'prev_doc_id' is initialized to 0, which is a valid doc,
     // we have a case where the 'top_list->curr_doc_id()' could start from 0, which is an exception to the rule.
     // Thus, if this is the first iteration and 'top_list->curr_doc_id()' is 0, it is an acceptable case.
@@ -468,13 +463,25 @@ void IndexMerger::WriteMetaFile() {
   index_metafile.WriteKeyValueStore(meta_filename.str().c_str());
 }
 
+float IndexMerger::QueryProgress() const {
+  float total_index_bytes = 0;
+  float total_index_bytes_read = 0;
+
+  for (vector<Index*>::const_iterator itr = indices_.begin(); itr != indices_.end(); ++itr) {
+    total_index_bytes += (*itr)->index_reader()->total_index_bytes();
+    total_index_bytes_read += (*itr)->index_reader()->total_disk_bytes_read();
+  }
+
+  return total_index_bytes_read / total_index_bytes;
+}
+
 /**************************************************************************************************************************************************************
  * CollectionMerger
  *
- * TODO: Current parameters assume that the input files are all from the initial indexing step; other cases should also be possible.
  **************************************************************************************************************************************************************/
+// Assumes that we're doing an initial merge of the whole collection.
 CollectionMerger::CollectionMerger(int num_initial_indices, int merge_degree, bool delete_merged_files) :
-  kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files) {
+  kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files), curr_merger_(NULL), curr_merger_active_(false) {
   GetDefaultLogger().Log("Merging " + logger::Stringify(num_initial_indices) + " indices with merge degree " + logger::Stringify(merge_degree), false);
 
   vector<IndexFiles> input_index_files;
@@ -483,60 +490,52 @@ CollectionMerger::CollectionMerger(int num_initial_indices, int merge_degree, bo
     input_index_files.push_back(index_files);
   }
 
-  // Calculate number of passes required to completely merge the initial indices.
-  // Need to take logarithm with base 'kMergeDegree' of 'num_initial_indices'.
-  // Use the change of base formula to do this.
-  int num_passes = ceil(log(num_initial_indices) / log(kMergeDegree));
-
-  Partition(input_index_files, 1, num_passes);
+  Partition(input_index_files, 1);
 }
 
-CollectionMerger::CollectionMerger(vector<IndexFiles>& input_index_files, int merge_degree, bool delete_merged_files) :
-  kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files) {
+// Doesn't assume anything about the filenames of the indices to merge, but output index files will be named as if we were doing an initial merge.
+CollectionMerger::CollectionMerger(const vector<IndexFiles>& input_index_files, int merge_degree, bool delete_merged_files) :
+  kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files), curr_merger_(NULL), curr_merger_active_(false) {
   GetDefaultLogger().Log("Merging " + logger::Stringify(input_index_files.size()) + " indices with merge degree " + logger::Stringify(merge_degree), false);
-
-  // Calculate number of passes required to completely merge the initial indices.
-  // Need to take logarithm with base 'kMergeDegree' of 'num_initial_indices'.
-  // Use the change of base formula to do this.
-  int num_passes = ceil(log(input_index_files.size()) / log(kMergeDegree));
-  Partition(input_index_files, 1, num_passes);
+  Partition(input_index_files, 1);
 }
 
-void CollectionMerger::Partition(const vector<IndexFiles>& input_index_files, int pass_num, int num_passes) {
-  if (input_index_files.size() == 1) {
-    IndexFiles final_index_files;
-    const IndexFiles& curr_index_files = input_index_files.front();
+// Does a merge of all the input indices in one pass, with the output index filenames specified.
+CollectionMerger::CollectionMerger(const vector<IndexFiles>& input_index_files, const IndexFiles& output_index_files, bool delete_merged_files) :
+  kMergeDegree(input_index_files.size()), kDeleteMergedFiles(delete_merged_files), curr_merger_(NULL), curr_merger_active_(false) {
+  GetDefaultLogger().Log("Merging " + logger::Stringify(input_index_files.size()) + " indices with merge degree " + logger::Stringify(input_index_files.size()),
+                         false);
 
-    int rename_ret;
-
-    rename_ret = rename(curr_index_files.index_filename().c_str(), final_index_files.index_filename().c_str());
-    if (rename_ret == -1) {
-      GetErrorLogger().LogErrno("Could not rename index file '" + curr_index_files.index_filename() + "' to final name '" + final_index_files.index_filename()
-          + "'", errno, false);
-    }
-
-    rename_ret = rename(curr_index_files.lexicon_filename().c_str(), final_index_files.lexicon_filename().c_str());
-    if (rename_ret == -1) {
-      GetErrorLogger().LogErrno("Could not rename lexicon file '" + curr_index_files.lexicon_filename() + "' to final name '"
-          + final_index_files.lexicon_filename() + "'", errno, false);
-    }
-
-    rename_ret = rename(curr_index_files.document_map_filename().c_str(), final_index_files.document_map_filename().c_str());
-    if (rename_ret == -1) {
-      GetErrorLogger().LogErrno("Could not rename document map file '" + curr_index_files.document_map_filename() + "' to final name '"
-          + final_index_files.document_map_filename() + "'", errno, false);
-    }
-
-    rename_ret = rename(curr_index_files.meta_info_filename().c_str(), final_index_files.meta_info_filename().c_str());
-    if (rename_ret == -1) {
-      GetErrorLogger().LogErrno("Could not rename meta info file '" + curr_index_files.meta_info_filename() + "' to final name '"
-          + final_index_files.meta_info_filename() + "'", errno, false);
-    }
-
+  if (kDeleteMergedFiles && input_index_files.size() == 1) {
+    RenameIndexFiles(input_index_files.front(), output_index_files);
     return;
   }
 
-  if (num_passes == 0 || input_index_files.empty()) {
+  curr_merger_ = new IndexMerger(input_index_files, output_index_files);
+  curr_merger_active_ = true;
+  curr_merger_->StartMerge();
+  curr_merger_active_ = false;
+  delete curr_merger_;
+  curr_merger_ = NULL;
+
+  if (kDeleteMergedFiles) {
+    // Delete files we no longer need to conserve disk space.
+    for (size_t i = 0; i < input_index_files.size(); ++i) {
+      RemoveIndexFiles(input_index_files[i]);
+    }
+  }
+}
+
+void CollectionMerger::Partition(const vector<IndexFiles>& input_index_files, int pass_num) {
+  if (input_index_files.empty()) {
+    return;
+  }
+
+  // If we can't delete the merged index files, only do a rename on the index files that were created during the course of this merge.
+  if ((kDeleteMergedFiles || pass_num != 1) && input_index_files.size() == 1) {
+    IndexFiles final_index_files;
+    const IndexFiles& curr_index_files = input_index_files.front();
+    RenameIndexFiles(curr_index_files, final_index_files);
     return;
   }
 
@@ -560,69 +559,101 @@ void CollectionMerger::Partition(const vector<IndexFiles>& input_index_files, in
       case 0:
         assert(false);  // This shouldn't happen.
         break;
-      case 1:
-        int rename_ret;
-
-        rename_ret = rename(curr_pass_index_files[0].index_filename().c_str(), curr_out_index_files.index_filename().c_str());
-        if (rename_ret == -1) {
-          GetErrorLogger().LogErrno("Could not rename index file '" + curr_pass_index_files[0].index_filename() + "' to '"
-              + curr_out_index_files.index_filename() + "'", errno, false);
-        }
-
-        rename_ret = rename(curr_pass_index_files[0].lexicon_filename().c_str(), curr_out_index_files.lexicon_filename().c_str());
-        if (rename_ret == -1) {
-          GetErrorLogger().LogErrno("Could not rename lexicon file '" + curr_pass_index_files[0].lexicon_filename() + "' to '"
-              + curr_out_index_files.lexicon_filename() + "'", errno, false);
-        }
-
-        rename_ret = rename(curr_pass_index_files[0].document_map_filename().c_str(), curr_out_index_files.document_map_filename().c_str());
-        if (rename_ret == -1) {
-          GetErrorLogger().LogErrno("Could not rename document map file '" + curr_pass_index_files[0].document_map_filename() + "' to '"
-              + curr_out_index_files.document_map_filename() + "'", errno, false);
-        }
-
-        rename_ret = rename(curr_pass_index_files[0].meta_info_filename().c_str(), curr_out_index_files.meta_info_filename().c_str());
-        if (rename_ret == -1) {
-          GetErrorLogger().LogErrno("Could not rename meta info file '" + curr_pass_index_files[0].meta_info_filename() + "' to '"
-              + curr_out_index_files.meta_info_filename() + "'", errno, false);
-        }
-        break;
       default:
-        IndexMerger* merger = new IndexMerger(curr_pass_index_files, curr_out_index_files);
-        delete merger;
+        curr_merger_ = new IndexMerger(curr_pass_index_files, curr_out_index_files);
+        curr_merger_active_ = true;
+        curr_merger_->StartMerge();
+        curr_merger_active_ = false;
+        delete curr_merger_;
+        curr_merger_ = NULL;
         next_pass_index_files.push_back(curr_out_index_files);
         break;
     }
 
     if (kDeleteMergedFiles) {
       // Delete files we no longer need to conserve disk space.
-      for (size_t j = 0; j < curr_pass_index_files.size(); j++) {
-        int remove_ret;
-
-        remove_ret = remove(curr_pass_index_files[j].index_filename().c_str());
-        if (remove_ret == -1) {
-          GetErrorLogger().LogErrno("Could not remove index file '" + curr_pass_index_files[j].index_filename() + "'", errno, false);
-        }
-
-        remove_ret = remove(curr_pass_index_files[j].lexicon_filename().c_str());
-        if (remove_ret == -1) {
-          GetErrorLogger().LogErrno("Could not remove lexicon file '" + curr_pass_index_files[j].lexicon_filename() + "'", errno, false);
-        }
-
-        remove_ret = remove(curr_pass_index_files[j].document_map_filename().c_str());
-        if (remove_ret == -1) {
-          GetErrorLogger().LogErrno("Could not remove document map file '" + curr_pass_index_files[j].document_map_filename() + "'", errno, false);
-        }
-
-        remove_ret = remove(curr_pass_index_files[j].meta_info_filename().c_str());
-        if (remove_ret == -1) {
-          GetErrorLogger().LogErrno("Could not remove meta info file '" + curr_pass_index_files[j].meta_info_filename() + "'", errno, false);
-        }
+      for (size_t j = 0; j < curr_pass_index_files.size(); ++j) {
+        RemoveIndexFiles(curr_pass_index_files[j]);
       }
     }
 
     curr_pass_index_files.clear();
   }
 
-  Partition(next_pass_index_files, pass_num + 1, num_passes - 1);
+  Partition(next_pass_index_files, pass_num + 1);
+}
+
+int CollectionMerger::GetNumPasses(int num_indices, int merge_degree) const {
+  // Calculate number of passes required to completely merge the initial indices.
+  // Need to take logarithm with base 'merge_degree' of 'num_indices'.
+  // Use the change of base formula to do this.
+  int num_passes = ceil(log(num_indices) / log(merge_degree));
+  return num_passes;
+}
+
+void CollectionMerger::RemoveIndexFiles(const IndexFiles& index_files) {
+  int remove_ret;
+
+  remove_ret = remove(index_files.index_filename().c_str());
+  if (remove_ret < 0) {
+    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove index file '" + index_files.index_filename() + "'", errno,
+                              false);
+  }
+
+  remove_ret = remove(index_files.lexicon_filename().c_str());
+  if (remove_ret < 0) {
+    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove lexicon file '" + index_files.lexicon_filename() + "'",
+                              errno, false);
+  }
+
+  remove_ret = remove(index_files.document_map_filename().c_str());
+  if (remove_ret < 0) {
+    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove document map file '" + index_files.document_map_filename()
+        + "'", errno, false);
+  }
+
+  remove_ret = remove(index_files.meta_info_filename().c_str());
+  if (remove_ret < 0) {
+    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove meta info file '" + index_files.meta_info_filename() + "'",
+                              errno, false);
+  }
+}
+
+void CollectionMerger::RenameIndexFiles(const IndexFiles& curr_index_files, const IndexFiles& final_index_files) {
+  int rename_ret;
+
+  rename_ret = rename(curr_index_files.index_filename().c_str(), final_index_files.index_filename().c_str());
+  if (rename_ret < 0) {
+    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename index file '" + curr_index_files.index_filename() + "' to '"
+        + final_index_files.index_filename() + "'", errno, false);
+  }
+
+  rename_ret = rename(curr_index_files.lexicon_filename().c_str(), final_index_files.lexicon_filename().c_str());
+  if (rename_ret < 0) {
+    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename lexicon file '" + curr_index_files.lexicon_filename()
+        + "' to '" + final_index_files.lexicon_filename() + "'", errno, false);
+  }
+
+  rename_ret = rename(curr_index_files.document_map_filename().c_str(), final_index_files.document_map_filename().c_str());
+  if (rename_ret < 0) {
+    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename document map file '"
+        + curr_index_files.document_map_filename() + "' to '" + final_index_files.document_map_filename() + "'", errno, false);
+  }
+
+  rename_ret = rename(curr_index_files.meta_info_filename().c_str(), final_index_files.meta_info_filename().c_str());
+  if (rename_ret < 0) {
+    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename meta info file '" + curr_index_files.meta_info_filename()
+        + "' to '" + final_index_files.meta_info_filename() + "'", errno, false);
+  }
+}
+
+// Can be used to monitor progress of the merge in the future.
+// This will have to be called asynchronously (threads or signals).
+// Might need a mutex lock on 'curr_merger_active_' (or rather, it can become the mutex lock).
+float CollectionMerger::CurrentMergeProgress() const {
+  if (curr_merger_active_) {
+    return curr_merger_->QueryProgress();
+  } else {
+    return 0.0f;
+  }
 }

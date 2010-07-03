@@ -47,12 +47,12 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "compression_toolkit/pfor_coding.h"
-#include "compression_toolkit/rice_coding.h"
-#include "compression_toolkit/rice_coding2.h"
-#include "compression_toolkit/s9_coding.h"
-#include "compression_toolkit/s16_coding.h"
-#include "compression_toolkit/vbyte_coding.h"
+//#include "compression_toolkit/pfor_coding.h"
+//#include "compression_toolkit/rice_coding.h"
+//#include "compression_toolkit/rice_coding2.h"
+//#include "compression_toolkit/s9_coding.h"
+//#include "compression_toolkit/s16_coding.h"
+//#include "compression_toolkit/vbyte_coding.h"
 #include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
@@ -63,34 +63,49 @@
 using namespace std;
 
 /**************************************************************************************************************************************************************
- * DecodedChunk
+ * ChunkDecoder
  *
  **************************************************************************************************************************************************************/
-const int DecodedChunk::kChunkSize;  // Initialized in the class definition.
-const int DecodedChunk::kMaxProperties;  // Initialized in the class definition.
+const int ChunkDecoder::kChunkSize;  // Initialized in the class definition.
+const int ChunkDecoder::kMaxProperties;  // Initialized in the class definition.
 
-DecodedChunk::DecodedChunk(const DecodedChunkProperties& properties, const uint32_t* buffer, int num_docs) :
-  properties_(properties), num_docs_(num_docs), curr_document_offset_(0), prev_document_offset_(0), curr_position_offset_(0), prev_decoded_doc_id_(0),
-      num_positions_(0), decoded_properties_(false), curr_buffer_position_(buffer) {
-  curr_buffer_position_ += DecodeDocIds(curr_buffer_position_);
+ChunkDecoder::ChunkDecoder() :
+  num_docs_(0), curr_document_offset_(-1), prev_document_offset_(0), curr_position_offset_(0), prev_decoded_doc_id_(0), num_positions_(0),
+      decoded_properties_(false), curr_buffer_position_(NULL), decoded_(false) {
 }
 
-int DecodedChunk::DecodeDocIds(const uint32_t* compressed_doc_ids) {
-  assert(compressed_doc_ids != NULL);
+void ChunkDecoder::InitChunk(const ChunkProperties& properties, const uint32_t* buffer, int num_docs) {
+  // TODO: Try to eliminate unnecessary initializations if possible. Same for the BlockDecoder initialization.
+  properties_ = properties;
+  num_docs_ = num_docs;
+  curr_document_offset_ = -1;  // TODO: -1 signals that we haven't had an intersection yet...
+  prev_document_offset_ = 0;
+  curr_position_offset_ = 0;
+  prev_decoded_doc_id_ = 0;
+//  num_positions_ = 0;
+  decoded_properties_ = false;
+  curr_buffer_position_ = buffer;
+  decoded_ = false;
+}
 
-  s16_coding decompressor;
+void ChunkDecoder::DecodeDocIds() {
+  assert(curr_buffer_position_ != NULL);
+
   // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = decompressor.Decompression(const_cast<uint32_t*> (compressed_doc_ids), doc_ids_, num_docs_);
+//  int num_words_consumed = doc_id_decompressor.Decompression(const_cast<uint32_t*> (curr_buffer_position_), doc_ids_, num_docs_);
 
+  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
   // PForDelta coding with total padding, results in bad compression.
-  //pfor_coding decompressor;
-  //decompressor.set_size(DecodedChunk::kChunkSize);
-  //// A word is meant to be sizeof(uint32_t) bytes in this context.
-  //int num_words_consumed = decompressor.Decompression(const_cast<uint32_t*>(compressed_doc_ids), doc_ids_);
-  return num_words_consumed;
+  doc_id_decompressor.set_size(ChunkDecoder::kChunkSize);
+  // A word is meant to be sizeof(uint32_t) bytes in this context.
+  int num_words_consumed = doc_id_decompressor.Decompression(const_cast<uint32_t*>(curr_buffer_position_), doc_ids_, num_docs_);
+  ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+  curr_buffer_position_ += num_words_consumed;
+  decoded_ = true;
 }
 
-void DecodedChunk::DecodeProperties() {
+void ChunkDecoder::DecodeProperties() {
   curr_buffer_position_ += DecodeFrequencies(curr_buffer_position_);
   if (properties_.includes_positions)
     curr_buffer_position_ += DecodePositions(curr_buffer_position_);
@@ -99,42 +114,42 @@ void DecodedChunk::DecodeProperties() {
   decoded_properties_ = true;
 }
 
-int DecodedChunk::DecodeFrequencies(const uint32_t* compressed_frequencies) {
+int ChunkDecoder::DecodeFrequencies(const uint32_t* compressed_frequencies) {
   assert(compressed_frequencies != NULL);
 
-  s9_coding decompressor;
   // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = decompressor.Decompression(const_cast<uint32_t*> (compressed_frequencies), frequencies_, num_docs_);
+  int num_words_consumed = frequency_decompressor.Decompression(const_cast<uint32_t*> (compressed_frequencies), frequencies_, num_docs_);
   return num_words_consumed;
 }
 
-int DecodedChunk::DecodePositions(const uint32_t* compressed_positions) {
+int ChunkDecoder::DecodePositions(const uint32_t* compressed_positions) {
   assert(compressed_positions != NULL);
 
+  num_positions_ = 0;
   // Count the number of positions we have in total by summing up all the frequencies.
   for (int i = 0; i < num_docs_; ++i) {
     assert(frequencies_[i] != 0);  // This condition indicates a bug in the program.
     num_positions_ += frequencies_[i];
   }
 
-  assert(num_positions_ <= (DecodedChunk::kChunkSize * DecodedChunk::kMaxProperties));
+  assert(num_positions_ <= (ChunkDecoder::kChunkSize * ChunkDecoder::kMaxProperties));
 
-  pfor_coding decompressor;
-  decompressor.set_size(DecodedChunk::kChunkSize);
+  pfor_coding decompressor;  // TODO: Declare as a class member.
+  decompressor.set_size(ChunkDecoder::kChunkSize);
 
   // TODO: Make sure parameter matches in encoding code (make global setting).
   const int kPadUnless = 100;  // Pad unless we have < kPadUntil documents left to code into a block.
 
-  int num_whole_chunklets = num_positions_ / DecodedChunk::kChunkSize;
+  int num_whole_chunklets = num_positions_ / ChunkDecoder::kChunkSize;
   int compressed_positions_offset = 0;
   int decompressed_positions_offset = 0;
   while (num_whole_chunklets-- > 0) {
     compressed_positions_offset += decompressor.Decompression(const_cast<uint32_t*> (compressed_positions) + compressed_positions_offset, positions_
-        + decompressed_positions_offset, DecodedChunk::kChunkSize);
-    decompressed_positions_offset += DecodedChunk::kChunkSize;
+        + decompressed_positions_offset, ChunkDecoder::kChunkSize);
+    decompressed_positions_offset += ChunkDecoder::kChunkSize;
   }
 
-  int positions_left = num_positions_ % DecodedChunk::kChunkSize;
+  int positions_left = num_positions_ % ChunkDecoder::kChunkSize;
   if (positions_left == 0) {
     // Nothing to do here.
   } else if (positions_left < kPadUnless) {
@@ -145,18 +160,39 @@ int DecodedChunk::DecodePositions(const uint32_t* compressed_positions) {
   } else {
     // Decode leftover portion with a blockwise decompressor, since it was padded to the blocksize.
     compressed_positions_offset += decompressor.Decompression(const_cast<uint32_t*> (compressed_positions) + compressed_positions_offset, positions_
-        + decompressed_positions_offset, DecodedChunk::kChunkSize);
+        + decompressed_positions_offset, ChunkDecoder::kChunkSize);
   }
 
   return compressed_positions_offset;
 }
 
+void ChunkDecoder::UpdatePropertiesOffset() {
+  assert(decoded_properties_ == true);
+  for (int i = prev_document_offset_; i < curr_document_offset_; ++i) {
+    assert(frequencies_[i] != 0);  // This indicates a bug in the program.
+    curr_position_offset_ += frequencies_[i];
+  }
+  prev_document_offset_ = curr_document_offset_;
+}
+
 /**************************************************************************************************************************************************************
- * BlockData
+ * BlockDecoder
  *
  **************************************************************************************************************************************************************/
-BlockData::BlockData(int block_num, int starting_chunk, CacheManager& cache_manager) :
-  num_chunks_(0), curr_chunk_(0), starting_chunk_(starting_chunk), curr_block_data_(cache_manager.GetBlock(block_num)), chunk_properties_(NULL), chunks_(NULL) {
+BlockDecoder::BlockDecoder() :
+  curr_block_num_(0), num_chunks_(0), starting_chunk_(0), curr_chunk_(0), curr_block_data_(NULL), chunk_properties_(NULL), chunk_properties_size_(0) {
+}
+
+BlockDecoder::~BlockDecoder() {
+  delete[] chunk_properties_;
+}
+
+void BlockDecoder::InitBlock(uint64_t block_num, int starting_chunk, uint32_t* block_data) {
+  curr_block_num_ = block_num;
+  starting_chunk_ = starting_chunk;
+  curr_chunk_ = starting_chunk_;
+  curr_block_data_ = block_data;
+
   uint32_t num_chunks;
   memcpy(&num_chunks, curr_block_data_, sizeof(num_chunks));
   num_chunks_ = num_chunks;
@@ -165,25 +201,15 @@ BlockData::BlockData(int block_num, int starting_chunk, CacheManager& cache_mana
 
   curr_block_data_ += DecompressHeader(curr_block_data_);
 
+  // Adjust our block data pointer to point to the starting chunk of this particular list.
   for (int i = 0; i < starting_chunk_; ++i) {
-    curr_block_data_ += GetChunkSize(i);
+    curr_block_data_ += chunk_size(i);
   }
 
-  chunks_ = new DecodedChunk*[num_chunks_ - starting_chunk_];
-  for (int i = 0; i < (num_chunks_ - starting_chunk_); i++) {
-    chunks_[i] = NULL;
-  }
+  curr_chunk_decoder_.set_decoded(false);
 }
 
-BlockData::~BlockData() {
-  for (int i = 0; i < (num_chunks_ - starting_chunk_); ++i) {
-    delete chunks_[i];
-  }
-  delete[] chunks_;
-  delete[] chunk_properties_;
-}
-
-int BlockData::DecompressHeader(uint32_t* compressed_header) {
+int BlockDecoder::DecompressHeader(uint32_t* compressed_header) {
   int header_len = num_chunks_ * 2;  // Number of integer entries we have to decompress (two integers per chunk).
 
   // TODO: Abstract away calculation of upper bound for S9/S16.
@@ -200,12 +226,65 @@ int BlockData::DecompressHeader(uint32_t* compressed_header) {
   // 3*sizeof(uint32_t) size in bytes (one int for doc id, frequency, position). Upper bound on the number of chunks will be
   // ((block size) / (3*sizeof(uint32_t))).  Then need to do as above, and double this by 2 (we have 2 ints to decode per chunk) and do an upper bound for
   // S9/S16 coding as above. What is the impact on performance and memory usage?
-  chunk_properties_ = new uint32_t[header_len_upper_bound];
 
-  s16_coding decompressor;
+  // Allocate twice as much as necessary to reduce allocations in general.
+  if(header_len_upper_bound > chunk_properties_size_) {
+    delete[] chunk_properties_;
+    chunk_properties_size_ = header_len_upper_bound * 2;
+    chunk_properties_ = new uint32_t[chunk_properties_size_];
+  }
+
   // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = decompressor.Decompression(compressed_header, chunk_properties_, header_len);
+  int num_words_consumed = header_decompressor.Decompression(compressed_header, chunk_properties_, header_len);
   return num_words_consumed;
+}
+
+/**************************************************************************************************************************************************************
+ * ListData
+ *
+ **************************************************************************************************************************************************************/
+ListData::ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager) :
+  kReadAheadBlocks(atol(Configuration::GetConfiguration().GetValue(config_properties::kReadAheadBlocks).c_str())), cache_manager_(cache_manager),
+      initial_block_num_(initial_block_num), last_queued_block_num_(initial_block_num + kReadAheadBlocks), curr_block_num_(initial_block_num_),
+      num_docs_(num_docs), num_docs_left_(num_docs_),
+      num_chunks_((num_docs / ChunkDecoder::kChunkSize) + ((num_docs % ChunkDecoder::kChunkSize == 0) ? 0 : 1)),
+      prev_block_last_doc_id_(0), cached_bytes_read_(0), disk_bytes_read_(0) {
+  if (kReadAheadBlocks <= 0) {
+    GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kReadAheadBlocks) + "'", true);
+  }
+
+  int disk_blocks_read = cache_manager_.QueueBlocks(initial_block_num_, last_queued_block_num_);
+  int cached_blocks_read = (last_queued_block_num_ - initial_block_num_) - disk_blocks_read;
+  disk_bytes_read_ += disk_blocks_read * CacheManager::kBlockSize;
+  cached_bytes_read_ += cached_blocks_read * CacheManager::kBlockSize;
+
+  curr_block_decoder_.InitBlock(curr_block_num_, starting_chunk, cache_manager_.GetBlock(curr_block_num_));
+}
+
+void ListData::AdvanceToNextBlock() {
+  cache_manager_.FreeBlock(curr_block_num_);
+  ++curr_block_num_;
+
+  if (num_docs_left_ > 0) {
+    // Read ahead the next several MBs worth of blocks.
+    if (curr_block_num_ == last_queued_block_num_) {
+      last_queued_block_num_ += kReadAheadBlocks;
+      int disk_blocks_read = cache_manager_.QueueBlocks(curr_block_num_, last_queued_block_num_);
+      int cached_blocks_read = (last_queued_block_num_ - curr_block_num_) - disk_blocks_read;
+      disk_bytes_read_ += disk_blocks_read * CacheManager::kBlockSize;
+      cached_bytes_read_ += cached_blocks_read * CacheManager::kBlockSize;
+    }
+
+    // Any subsequent blocks in the list (after the first block, will have the list start at chunk 0).
+    curr_block_decoder_.InitBlock(curr_block_num_, 0, cache_manager_.GetBlock(curr_block_num_));
+  }
+}
+
+ListData::~ListData() {
+  // Free the current block plus any blocks we read ahead.
+  for (uint64_t i = curr_block_num_; i < last_queued_block_num_; ++i) {
+    cache_manager_.FreeBlock(i);
+  }
 }
 
 /**************************************************************************************************************************************************************
@@ -222,25 +301,30 @@ Lexicon::Lexicon(int hash_table_size, const char* lexicon_filename, bool random_
 
 Lexicon::~Lexicon() {
   delete[] lexicon_buffer_;
+  delete lexicon_;
 
   int close_ret = close(lexicon_fd_);
-  assert(close_ret != -1);
+  if (close_ret < 0) {
+    GetErrorLogger().LogErrno("close() in Lexicon::~Lexicon(), trying to close lexicon", errno, false);
+  }
 }
 
 void Lexicon::Open(const char* lexicon_filename, bool random_access) {
   lexicon_fd_ = open(lexicon_filename, O_RDONLY);
-  if (lexicon_fd_ == -1) {
-    GetErrorLogger().LogErrno("open(), trying to open lexicon file with read only access", errno, true);
+  if (lexicon_fd_ < 0) {
+    GetErrorLogger().LogErrno("open() in Lexicon::Open()", errno, true);
   }
 
   struct stat stat_buf;
-  if (fstat(lexicon_fd_, &stat_buf) == -1) {
+  if (fstat(lexicon_fd_, &stat_buf) < 0) {
     GetErrorLogger().LogErrno("fstat() in Lexicon::Open()", errno, true);
   }
   lexicon_file_size_ = stat_buf.st_size;
 
   int read_ret = read(lexicon_fd_, lexicon_buffer_, kLexiconBufferSize);
-  assert(read_ret != -1);
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in Lexicon::Open(), trying to read lexicon", errno, true);
+  }
 
   if (random_access) {
     int num_terms = 0;
@@ -289,7 +373,9 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
   if (lexicon_buffer_ptr_ + (kNumLexiconIntEntries * sizeof(int)) > lexicon_buffer_ + kLexiconBufferSize) {
     lseek(lexicon_fd_, num_bytes_read_, SEEK_SET); // Seek just past where we last read data.
     int read_ret = read(lexicon_fd_, lexicon_buffer_, kLexiconBufferSize);
-    assert(read_ret != -1);
+    if (read_ret < 0) {
+      GetErrorLogger().LogErrno("read() in Lexicon::GetNext(), trying to read lexicon", errno, true);
+    }
     lexicon_buffer_ptr_ = lexicon_buffer_;
   }
 
@@ -309,7 +395,9 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
     lexicon_buffer_ = new char[kLexiconBufferSize];
     lseek(lexicon_fd_, num_bytes_read_, SEEK_SET);  // Seek just past where we last read data.
     int read_ret = read(lexicon_fd_, lexicon_buffer_, kLexiconBufferSize);
-    assert(read_ret != -1);
+    if (read_ret < 0) {
+      GetErrorLogger().LogErrno("read() in Lexicon::GetNext(), trying to read lexicon", errno, true);
+    }
     lexicon_buffer_ptr_ = lexicon_buffer_;
   }
 
@@ -317,7 +405,9 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
   if (lexicon_buffer_ptr_ + ((kNumLexiconIntEntries - 1) * sizeof(int)) + term_len > lexicon_buffer_ + kLexiconBufferSize) {
     lseek(lexicon_fd_, num_bytes_read_, SEEK_SET);  // Seek just past where we last read data.
     int read_ret = read(lexicon_fd_, lexicon_buffer_, kLexiconBufferSize);
-    assert(read_ret != -1);
+    if (read_ret < 0) {
+      GetErrorLogger().LogErrno("read() in Lexicon::GetNext(), trying to read lexicon", errno, true);
+    }
     lexicon_buffer_ptr_ = lexicon_buffer_;
   }
 
@@ -360,74 +450,22 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
 }
 
 /**************************************************************************************************************************************************************
- * ListData
- *
- **************************************************************************************************************************************************************/
-ListData::ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager) :
-  kReadAheadBlocks(atol(Configuration::GetConfiguration().GetValue(config_properties::kReadAheadBlocks).c_str())), cache_manager_(cache_manager),
-      initial_block_num_(initial_block_num), last_queued_block_num_(initial_block_num + kReadAheadBlocks), curr_block_num_(initial_block_num_),
-      curr_block_(NULL), num_docs_left_(num_docs), num_chunks_left_((num_docs / DecodedChunk::kChunkSize) + ((num_docs % DecodedChunk::kChunkSize == 0) ? 0 : 1)),
-      prev_block_last_doc_id_(0) {
-  if (kReadAheadBlocks <= 0) {
-    GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kReadAheadBlocks) + "'", true);
-  }
-
-  cache_manager_.QueueBlocks(initial_block_num_, last_queued_block_num_);
-  curr_block_ = new BlockData(curr_block_num_, starting_chunk, cache_manager_);
-}
-
-void ListData::AdvanceToNextBlock() {
-  delete curr_block_;
-  cache_manager_.FreeBlock(curr_block_num_);
-  ++curr_block_num_;
-
-  if (num_chunks_left_ > 0) {
-    // Read ahead the next several MBs worth of blocks.
-    if (curr_block_num_ == last_queued_block_num_) {
-      last_queued_block_num_ += kReadAheadBlocks;
-      cache_manager_.QueueBlocks(curr_block_num_, last_queued_block_num_);
-    }
-
-    // Any subsequent blocks in the list (after the first block, will have the list start at chunk 0).
-    curr_block_ = new BlockData(curr_block_num_, 0, cache_manager_);
-  } else {
-    curr_block_ = NULL;
-
-    // Free any blocks we read ahead, but won't be using since they're not part of the list.
-    for (uint64_t i = curr_block_num_; i < last_queued_block_num_; ++i) {
-      cache_manager_.FreeBlock(i);
-    }
-  }
-}
-
-ListData::~ListData() {
-  if (curr_block_ != NULL) {
-    // Free the current block plus any blocks we read ahead.
-    for (uint64_t i = curr_block_num_; i < last_queued_block_num_; ++i) {
-      cache_manager_.FreeBlock(i);
-    }
-
-    delete curr_block_;
-  }
-}
-
-/**************************************************************************************************************************************************************
  * IndexReader
  *
- * Initiates loading of several MBs worth of blocks ahead since we don't know exactly how many blocks are in the list.  Each block is processed as soon as it's
+ * Initiates loading of several MBs worth of blocks ahead since we don't know exactly how many blocks are in the list. Each block is processed as soon as it's
  * needed and we know it has been loaded into memory.
  **************************************************************************************************************************************************************/
 IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename,
                          const char* doc_map_filename, const char* meta_info_filename) :
   purpose_(purpose), document_order_(document_order), kLexiconSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kLexiconSize).c_str())),
       lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)), cache_manager_(cache_manager), includes_contexts_(false),
-      includes_positions_(false) {
+      includes_positions_(false), total_cached_bytes_read_(0), total_disk_bytes_read_(0), total_num_lists_accessed_(0) {
   if (kLexiconSize <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kLexiconSize) + "'", true);
   }
 
-  LoadDocMap(doc_map_filename);
   LoadMetaInfo(meta_info_filename);
+  LoadDocMap(doc_map_filename);
 }
 
 ListData* IndexReader::OpenList(const LexiconData& lex_data) {
@@ -436,100 +474,95 @@ ListData* IndexReader::OpenList(const LexiconData& lex_data) {
   return list_data;
 }
 
-// TODO: Improvement would be to delete chunks right away after we're done processing them (and set it's position to NULL in the BlockData).
-// We can detect when we no longer need a chunk when we look for a doc id in the chunk, and we're about to move to the next chunk because we haven't
-// found the doc id in the current chunk. This is because we're always going to start looking for a doc id at the current chunk before moving to the next one,
-// even if we know that we just processed the last doc id of the current chunk.
+// TODO: Some potential improvements:
+// * For single word and OR type queries, we don't need to decode the block header, since we won't be doing any chunk skipping. This requires storing the size of
+//   the block header (in number of ints) so we can skip past it.
+// * Can calculate the inclusive prefix sum of all the chunk sizes while building the block header; then won't have to add them while doing chunk skipping.
+// * Keep in mind cache line size: 64 bytes (16 4-byte integers) on Core 2 and later (32 bytes is more portable though).
+//inline uint32_t __attribute__((always_inline)) IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
 uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
   assert(list_data != NULL);
 
-  // Loop through blocks in this list.
-  BlockData* block_data;
-  while((block_data = list_data->curr_block()) != NULL) {
-    // Loop while we have more chunks in the block and while we still have more chunks in the list, since a block might have more chunks but they're for different lists.
-    for (int j = (block_data->starting_chunk() + block_data->curr_chunk()); j < block_data->num_chunks() && list_data->num_chunks_left() > 0; ++j, list_data->decrement_num_chunks_left()) {
+  while (list_data->num_docs_left() > 0) {
+    BlockDecoder* block = list_data->curr_block_decoder();
+
+    int curr_chunk_num = block->curr_chunk();
+    if (curr_chunk_num < block->num_chunks()) {
       // Check the last doc id of the chunk against the current doc id we're looking for and skip the chunk if possible.
-      if (block_data->GetChunkLastDocId(j) >= doc_id) {
-        DecodedChunk* chunk;
+      if (doc_id <= block->chunk_last_doc_id(curr_chunk_num)) {
+        ChunkDecoder* chunk = block->curr_chunk_decoder();
 
         // Check if we previously decoded this chunk and decode if necessary.
-        if (block_data->GetChunk(j) == NULL) {
-          // Find the number of documents contained in this chunk and update the number of unprocessed documents left in this list.
-          int num_docs_left = list_data->num_docs_left();
-          int docs_in_chunk = DecodedChunk::CalculateNumDocsInChunk(num_docs_left);
-          // Update the number of documents left to process in the list.
-          list_data->set_num_docs_left(num_docs_left - docs_in_chunk);
-
+        if (block->curr_chunk_decoded() == false) {
           // Create a new chunk and add it to the block.
-          block_data->UpdateCurrBlockData(j); // Moves the block data pointer to the current chunk we have to decode and takes into account chunk skipping.
-          DecodedChunk::DecodedChunkProperties chunk_properties;
+          ChunkDecoder::ChunkProperties chunk_properties;
           chunk_properties.includes_contexts = includes_contexts_;
           chunk_properties.includes_positions = includes_positions_;
-          chunk = new DecodedChunk(chunk_properties, block_data->curr_block_data(), docs_in_chunk);
-          block_data->AddChunk(chunk, j);
-        } else {
-          chunk = block_data->GetChunk(j);
-        }
+          chunk->InitChunk(chunk_properties, block->curr_block_data(), std::min(ChunkDecoder::kChunkSize, list_data->num_docs_left()));
+          chunk->DecodeDocIds();
 
-        uint32_t curr_doc_id_offset = chunk->prev_decoded_doc_id();
-        for (int k = chunk->curr_document_offset(); k < chunk->num_docs(); ++k) {
-          uint32_t curr_doc_id = chunk->GetDocId(k);
-
-          // Here we handle doc id gaps.
-          // The current doc id is offset by the last doc id in the previous chunk for this list (if it exists)
-          // and by the previous doc id we have decoded in this chunk.
-          if (document_order_ == kSortedGapCoded) {
-            chunk->set_prev_decoded_doc_id(curr_doc_id_offset);  // TODO: don't have to set every time in loop, just right before we return the found doc id.
-            curr_doc_id_offset += curr_doc_id;
-            curr_doc_id = curr_doc_id_offset;
-
-            // List is across blocks and we need offset from previous block.
-            if (!list_data->initial_block() && j == 0 && block_data->curr_chunk() == block_data->starting_chunk()) {
-              curr_doc_id += list_data->prev_block_last_doc_id();
-            }
-
-            // We need offset from previous chunk if this is the first chunk in the list.
-            if (j > block_data->starting_chunk()) {
-              curr_doc_id += block_data->GetChunkLastDocId(j - 1);
-            }
+          // Need to do these offsets only if we haven't done them before for this chunk. This is to handle d-gap coding.
+          // List is across blocks and we need offset from previous block.
+          if (!list_data->initial_block() && curr_chunk_num == 0) {
+            uint32_t doc_id_offset = list_data->prev_block_last_doc_id();
+            chunk->update_prev_decoded_doc_id(doc_id_offset);
           }
 
-          // Found the doc id we're looking for.
+          // We need offset from previous chunk if this is not the first chunk in the list.
+          if (curr_chunk_num > block->starting_chunk()) {
+            uint32_t doc_id_offset = block->chunk_last_doc_id(curr_chunk_num - 1);
+            chunk->update_prev_decoded_doc_id(doc_id_offset);
+          }
+
+          // Can decode all d-gaps in one swoop.
+          /*uint32_t prev_doc_id = chunk->prev_decoded_doc_id();
+          for (int k = 0; k < chunk->num_docs(); ++k) {
+            prev_doc_id += chunk->doc_id(k);
+            chunk->set_doc_id(k, prev_doc_id);
+          }*/
+        }
+
+        uint32_t curr_doc_id = chunk->prev_decoded_doc_id();
+
+        // The current document offset was the last docID processed, so we increment by 1 in order to not process it again. But not for the first chunk processed.
+        int curr_document_offset = chunk->curr_document_offset() == -1 ? 0 : chunk->curr_document_offset() + 1;
+        for (int k = curr_document_offset; k < chunk->num_docs(); ++k) {
+          curr_doc_id += chunk->doc_id(k);  // Necessary for d-gap coding.
+
+          // Found the docID we're looking for.
           if (curr_doc_id >= doc_id) {
-            block_data->SetCurrChunk(j);
-            chunk->SetDocumentOffset(k);  // Important for getting the correct frequency and positions list for document during ranking.
+            chunk->set_curr_document_offset(k);  // Offset for the frequency.
+            chunk->set_prev_decoded_doc_id(curr_doc_id);  // Comment out if you want to decode all d-gaps in one swoop.
             return curr_doc_id;
+            /*return chunk->doc_id(k);*/  // When we decode all d-gaps in one swoop.
           }
-        }
-
-        // Moving on to the next chunk.
-        // We could not find the doc id we were looking for, so we need to set the current chunk in the block
-        // so the pointer to the next chunk is correctly offset in the block data.
-        block_data->SetCurrChunk(j);
-      } else {
-        // If we'll be skipping this chunk completely without decoding, we still need to update the number of documents left to process in this list.
-        // First make sure we haven't previously decoded this chunk, so we don't double count it.
-        if (block_data->GetChunk(j) == NULL) {
-          int num_docs_left = list_data->num_docs_left();
-          list_data->set_num_docs_left(num_docs_left - DecodedChunk::CalculateNumDocsInChunk(num_docs_left));
         }
       }
+
+      // Moving on to the next chunk.
+      // We could not find the docID we were looking for, so we need to set the current chunk in the block
+      // so the pointer to the next chunk is correctly offset in the block data.
+      block->advance_curr_chunk();
+      block->curr_chunk_decoder()->set_decoded(false);
+
+      // Can update the number of documents left to process after processing the complete chunk.
+      list_data->update_num_docs_left();
+    } else {
+      // If list is across blocks, need to get offset from previous block, to be used when decoding docID gaps.
+      list_data->set_prev_block_last_doc_id(block->chunk_last_doc_id(block->num_chunks() - 1));
+
+      // We're moving on to process the next block. This block is of no use to us anymore.
+      list_data->AdvanceToNextBlock();
     }
-
-    // If list is across blocks, need to get offset from previous block, to be used when decoding doc id gaps.
-    list_data->set_prev_block_last_doc_id(block_data->GetChunkLastDocId(block_data->num_chunks() - 1));
-
-    // We're moving on to process the next block. This block is of no use to us anymore.
-    list_data->AdvanceToNextBlock();
   }
 
-  // No other chunks in this list have a doc id >= 'doc_id', so return this sentinel value to indicate this.
-  return numeric_limits<uint32_t>::max();
+  // No other chunks in this list have a docID >= 'doc_id', so return this sentinel value to indicate this.
+  return std::numeric_limits<uint32_t>::max();
 }
 
 uint32_t IndexReader::GetFreq(ListData* list_data, uint32_t doc_id) {
   assert(list_data != NULL);
-  DecodedChunk* chunk = list_data->curr_block()->GetCurrChunk();
+  ChunkDecoder* chunk = list_data->curr_block_decoder()->curr_chunk_decoder();
   assert(chunk != NULL);
   // Decode the frequencies and positions if we haven't already.
   if (!chunk->decoded_properties()) {
@@ -537,11 +570,148 @@ uint32_t IndexReader::GetFreq(ListData* list_data, uint32_t doc_id) {
   }
 
   // Need to set the correct offset for the positions and other frequency dependent properties.
-  chunk->SetPropertiesOffset();
-  return chunk->GetCurrentFrequency();
+  chunk->UpdatePropertiesOffset();
+  return chunk->current_frequency();
+}
+
+int IndexReader::GetList(ListData* list_data, IndexDataType data_type, uint32_t* index_data, int index_data_size) {
+  assert(list_data != NULL);
+
+  int curr_index_data_idx = 0;
+  uint32_t next_doc_id = 0;
+
+  uint32_t curr_doc_id;
+  uint32_t curr_frequency;
+  const uint32_t* curr_positions;
+
+  // Necessary for positions. If we have started decoding the list (on the previous call to this function)
+  // but stopped because we couldn't copy all the positions, copy them now.
+  if (data_type == kPosition && list_data->curr_block_decoder()->curr_chunk_decoder()->decoded()) {
+    curr_frequency = GetFreq(list_data, 0);  // Getting the frequency for docID 0 will actually return the frequency for the last decoded docID in the chunk.
+    curr_positions = list_data->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+    if (static_cast<int> (curr_frequency) <= index_data_size) {
+      // Copy the positions.
+      for (size_t i = 0; i < curr_frequency; ++i) {
+        index_data[curr_index_data_idx++] = curr_positions[i];
+      }
+    } else {
+      return -1;  // Indicates the array needs to be larger to retrieve the positions.
+    }
+  }
+
+  while (curr_index_data_idx < index_data_size && (curr_doc_id = NextGEQ(list_data, next_doc_id)) < numeric_limits<uint32_t>::max()) {
+    next_doc_id = curr_doc_id + 1;
+
+    bool continue_next = false;
+
+    switch (data_type) {
+      case kDocId:
+        // Copy the docID.
+        index_data[curr_index_data_idx++] = curr_doc_id;
+        break;
+
+      case kFrequency:
+        // Copy the frequency.
+        index_data[curr_index_data_idx++] = GetFreq(list_data, curr_doc_id);
+        break;
+
+      case kPosition:
+        curr_frequency = GetFreq(list_data, curr_doc_id);
+        curr_positions = list_data->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+
+        // We need to make sure we don't consume positions unless *all* of them fit into the supplied array.
+        if (static_cast<int> (curr_index_data_idx + curr_frequency) <= index_data_size) {
+          // Copy the positions.
+          for (size_t i = 0; i < curr_frequency; ++i) {
+            index_data[curr_index_data_idx++] = curr_positions[i];
+          }
+        } else {
+          // If this is the position data for the first document that doesn't fit into the supplied array,
+          // need to indicate for the user that the supplied array needs to be larger (instead of misleadingly returning 0).
+          if (curr_index_data_idx == 0) {
+            return -1;
+          }
+          continue_next = true;
+        }
+        break;
+
+      default:
+        assert(false);
+    }
+
+    if (continue_next) {
+      break;
+    }
+  }
+
+  // Returns the number of data items decoded and stored into the supplied array.
+  // No more data left to consume after we return 0.
+  return curr_index_data_idx;
+}
+
+// TODO: Would be useful to store the total number of chunks contained in a block and the size of the block header.
+int IndexReader::LoopOverList(ListData* list_data, IndexDataType data_type) {
+  assert(list_data != NULL);
+
+  int count = 0;
+
+  uint32_t curr_frequency;
+  while (list_data->num_docs_left() > 0) {
+    BlockDecoder* block = list_data->curr_block_decoder();
+
+    int curr_chunk_num = block->curr_chunk();
+    if (curr_chunk_num < block->num_chunks()) {
+      ChunkDecoder* chunk = block->curr_chunk_decoder();
+      // Create a new chunk and add it to the block.
+      ChunkDecoder::ChunkProperties chunk_properties;
+      chunk_properties.includes_contexts = includes_contexts_;
+      chunk_properties.includes_positions = includes_positions_;
+      chunk->InitChunk(chunk_properties, block->curr_block_data(), std::min(ChunkDecoder::kChunkSize, list_data->num_docs_left()));
+      chunk->DecodeDocIds();
+
+      for (int k = 0; k < chunk->num_docs(); ++k) {
+        switch (data_type) {
+          case kDocId:
+            chunk->doc_id(k);
+            ++count;
+            break;
+
+          case kFrequency:
+            chunk->set_curr_document_offset(k);  // Offset for the frequency.
+            curr_frequency = GetFreq(list_data, 0);
+            ++count;
+            break;
+
+          case kPosition:
+            chunk->set_curr_document_offset(k);  // Offset for the frequency.
+            curr_frequency = GetFreq(list_data, 0);
+            list_data->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+            count += curr_frequency;
+            break;
+
+          default:
+            assert(false);
+        }
+      }
+
+      // Moving on to the next chunk.
+      block->advance_curr_chunk();
+      // Can update the number of documents left to process after processing the complete chunk.
+      list_data->update_num_docs_left();
+    } else {
+      // We're moving on to process the next block. This block is of no use to us anymore.
+      list_data->AdvanceToNextBlock();
+    }
+  }
+
+  return count;
 }
 
 void IndexReader::CloseList(ListData* list_data) {
+  total_cached_bytes_read_ += list_data->cached_bytes_read();
+  total_disk_bytes_read_ += list_data->disk_bytes_read();
+  ++total_num_lists_accessed_;
+
   delete list_data;
 }
 

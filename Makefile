@@ -1,7 +1,8 @@
-CXXFLAGS =	-O2 -g -Wall #-DNDEBUG
-			#-Wvla : warns about variable length arrays.
+CXXFLAGS =	-O3 -g -Wall
 			#-DNDEBUG : defines NDEBUG to turn off assertions.
 			#-pg : enables code profiling.
+			#-Wvla : warns about variable length arrays.
+			#-Winline : warns about functions declared inline but were not actually inlined.
 
 OBJS =		src/cache_manager.o \
 			src/configuration.o \
@@ -24,6 +25,7 @@ OBJS =		src/cache_manager.o \
 			src/test_compression.o \
 			src/timer.o \
 			src/term_hash_table.o \
+			src/uncompress_file.o \
 			src/compression_toolkit/coding_factory.o \
 			src/compression_toolkit/null_coding.o \
 			src/compression_toolkit/pfor_coding.o \
@@ -34,11 +36,11 @@ OBJS =		src/cache_manager.o \
 			src/compression_toolkit/vbyte_coding.o \
 			src/compression_toolkit/unpack.o
 
-LIBS =		-lpthread -lrt -lz #-lc_p #-lefence
+LIBS =		-lpthread -lrt -lz
 			#-lpthread : pthreads support.
 			#-lrt : necessary for POSIX Asynchronous I/O support (AIO).
 			#-lz : zlib support.
-			#-lc_p : profiling support for C library calls.
+			#-static-libgcc -lc_p : profiling support for C library calls.
 			#-lefence : electric fence memory debugger (only used for debugging).
 
 TARGET =	irtk

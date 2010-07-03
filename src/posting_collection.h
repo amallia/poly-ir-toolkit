@@ -170,8 +170,8 @@ public:
     return curr_allocated_block_;
   }
 
-  const int kMemoryPoolSize;
-  const int kBlockSize;
+  const long int kMemoryPoolSize;
+  const long int kBlockSize;
 
 private:
   PostingCollection* posting_collection_;
@@ -428,7 +428,7 @@ public:
   }
 
 private:
-  const int kHashTableSize;
+  const long int kHashTableSize;
   MoveToFrontHashTable<TermBlock> term_block_table_;
 
   // Postings that should go into the next index are referred to as "overflow postings".

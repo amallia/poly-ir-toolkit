@@ -47,6 +47,8 @@ public:
   IndexFiles(const std::string& index_filename, const std::string& lexicon_filename, const std::string& document_map_filename,
              const std::string& meta_info_filename);
 
+  void SetDirectory(const std::string& dir);
+
   const std::string& index_filename() const {
     return index_filename_;
   }
@@ -87,9 +89,7 @@ public:
   ~Index();
 
   bool Next();
-
   bool NextTerm();
-
   bool NextDocId();
 
   IndexReader* index_reader() const {

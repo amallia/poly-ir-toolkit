@@ -116,19 +116,21 @@ Chunk::~Chunk() {
 void Chunk::CompressDocIds(uint32_t* doc_ids, int doc_ids_len) {
   assert(doc_ids != NULL && doc_ids_len > 0);
 
-  compressed_doc_ids_ = new uint32_t[doc_ids_len];
-  s16_coding compressor;
-  compressed_doc_ids_len_ = compressor.Compression(doc_ids, compressed_doc_ids_, doc_ids_len);
+//  compressed_doc_ids_ = new uint32_t[doc_ids_len];
+//  s16_coding compressor;
+//  compressed_doc_ids_len_ = compressor.Compression(doc_ids, compressed_doc_ids_, doc_ids_len);
 
+  ///////////////////////////////////////////////////////////////////////////////////////////////
   // PForDelta coding with total padding, results in bad compression.
   // Assumption that 'doc_ids []' is of size 'kChunkSize'.
-  //for (int i = doc_ids_len; i < kChunkSize; ++i) {
-  //  doc_ids[i] = 0;
-  //}
-  //compressed_doc_ids_ = new uint32_t[kChunkSize + 1];  // +1 for PForDelta metainfo.
-  //pfor_coding compressor;
-  //compressor.set_size(kChunkSize);
-  //compressed_doc_ids_len_ = compressor.Compression(doc_ids, compressed_doc_ids_);
+  for (int i = doc_ids_len; i < kChunkSize; ++i) {
+    doc_ids[i] = 0;
+  }
+  compressed_doc_ids_ = new uint32_t[kChunkSize + 1];  // +1 for PForDelta metainfo.
+  pfor_coding compressor;
+  compressor.set_size(kChunkSize);
+  compressed_doc_ids_len_ = compressor.Compression(doc_ids, compressed_doc_ids_, kChunkSize);
+  ///////////////////////////////////////////////////////////////////////////////////////////////////
 }
 
 void Chunk::CompressFrequencies(uint32_t* frequencies, int frequencies_len) {
@@ -350,12 +352,12 @@ IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filen
       lexicon_(new InvertedListMetaData*[kLexiconBufferSize]), lexicon_offset_(0), lexicon_fd_(open(lexicon_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR
           | S_IWUSR | S_IRGRP | S_IROTH)), num_unique_terms_(0), posting_count_(0), total_num_block_header_bytes_(0), total_num_doc_ids_bytes_(0),
       total_num_frequency_bytes_(0), total_num_positions_bytes_(0), total_num_wasted_space_bytes_(0) {
-  if (index_fd_ == -1) {
-    GetErrorLogger().LogErrno("open(), trying to open index for writing", errno, true);
+  if (index_fd_ < 0) {
+    GetErrorLogger().LogErrno("open() in IndexBuilder::IndexBuilder(), trying to open index for writing", errno, true);
   }
 
-  if (lexicon_fd_ == -1) {
-    GetErrorLogger().LogErrno("open(), trying to open lexicon for writing", errno, true);
+  if (lexicon_fd_ < 0) {
+    GetErrorLogger().LogErrno("open() in IndexBuilder::IndexBuilder(), trying to open lexicon for writing", errno, true);
   }
 }
 
@@ -385,7 +387,8 @@ void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
     blocks_buffer_[blocks_buffer_offset_++] = curr_block_;
     curr_block_ = new Block();
     bool added_chunk = curr_block_->AddChunk(chunk);
-    assert(added_chunk == true);
+    if (!added_chunk)
+      assert(false);
     if (blocks_buffer_offset_ == kBlocksBufferSize) {
       WriteBlocks();
       blocks_buffer_offset_ = 0;
@@ -425,8 +428,10 @@ void IndexBuilder::WriteBlocks() {
       total_num_positions_bytes_ += blocks_buffer_[i]->num_positions_bytes();
       total_num_wasted_space_bytes_ += blocks_buffer_[i]->num_wasted_space_bytes();
 
-      int ret = write(index_fd_, block_bytes, Block::kBlockSize);
-      assert(ret != -1);
+      int write_ret = write(index_fd_, block_bytes, Block::kBlockSize);
+      if (write_ret < 0) {
+        GetErrorLogger().LogErrno("write() in IndexBuilder::WriteBlocks()", errno, true);
+      }
       delete blocks_buffer_[i];
     }
   }
@@ -503,6 +508,9 @@ void IndexBuilder::WriteLexicon() {
 
     if (lexicon_data_offset + total_bytes > kLexiconBufferSize) {
       int write_ret = write(lexicon_fd_, lexicon_data, lexicon_data_offset);
+      if (write_ret < 0) {
+        GetErrorLogger().LogErrno("write() in IndexBuilder::WriteLexicon()", errno, true);
+      }
       assert(write_ret == lexicon_data_offset);
       lexicon_data_offset = 0;
       --i;  // Need to rerun this iteration, since now we made room in our buffer.
@@ -533,6 +541,9 @@ void IndexBuilder::WriteLexicon() {
   }
 
   int write_ret = write(lexicon_fd_, lexicon_data, lexicon_data_offset);
+  if (write_ret < 0) {
+    GetErrorLogger().LogErrno("write() in IndexBuilder::WriteLexicon()", errno, true);
+  }
   assert(write_ret == lexicon_data_offset);
 
   lexicon_offset_ = 0;

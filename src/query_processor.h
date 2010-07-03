@@ -52,7 +52,8 @@
 class QueryProcessor {
 public:
   typedef std::pair<float, unsigned int> Result;
-  typedef std::priority_queue<Result, std::vector<Result>, std::greater<Result> > Results;
+  typedef Result* Results;
+//  typedef std::priority_queue<Result, std::vector<Result>, std::greater<Result> > Results;
 
   enum ResultFormat {
     kTrec, kNormal
@@ -66,6 +67,7 @@ public:
 
   QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
                  QueryFormat query_format);
+  ~QueryProcessor();
 
   void AcceptQuery();
   int ProcessQuery(std::vector<std::string>& words, Results& results);
@@ -83,7 +85,7 @@ private:
   // The way we'll be accepting queries.
   QueryFormat query_format_;
 
-  LruCachePolicy cache_policy_;
+  CacheManager* cache_policy_;
   IndexReader index_reader_;
 
   // The average document length of a document in the indexed collection.
@@ -94,6 +96,25 @@ private:
 
   // Whether positions will be utilized during ranking (requires index built with positions).
   bool use_positions_;
+
+  // When true, don't produce any output.
+  bool silent_mode_;
+
+  // When true, don't time or count the queries. Queries issued during this time will be used for warming up the cache.
+  bool warm_up_mode_;
+
+  // Keeps track of the total elapsed query times.
+  double total_querying_time_;
+
+  // Keeps track of the number of queries issued.
+  uint64_t total_num_queries_;
+
+
+  // TODO: Finish this up.
+  // Parameters used in scoring documents. They are dynamically allocated and resized as necessary.
+  const int kInitialQuerySize;
+  int query_size_;
+  uint32_t* f_d_t_;
 };
 
 #endif /* QUERY_PROCESSOR_H_ */

@@ -39,8 +39,30 @@
 
 #include "index_layout_parameters.h"
 
+// NOTES:
+// GetCompressionPolicy
+// let it parse the expression (or just have method for parsing and another to just enter params)
+// it will init the proper policy --> use the base coding class for the compressor and leftover compressor...
+
+// ENCODING::
+// pass pointer to compressed data and decompressed space (assert there is enough space) ---> also have a function that will return the amount of decompressed space needed
+
+// DECODING::
+//
+
 // Defines chunk-wise compression policies.
 class CompressionPolicy {
+public:
+  CompressionPolicy* GetCompressionPolicy(bool compression, int policy);
+
+};
+
+class PForCompressionPolicy : CompressionPolicy {
+
+};
+
+class S16CompressionPolicy : CompressionPolicy {
+
 };
 
 #endif /* COMPRESSION_POLICY_H_ */

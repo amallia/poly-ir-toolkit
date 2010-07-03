@@ -104,8 +104,8 @@ void IndexDiff::Diff(const char* term, int term_len) {
         }
 
         if (includes_positions_) {
-          const uint32_t* curr_positions1 = index1_->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
-          const uint32_t* curr_positions2 = index2_->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
+          const uint32_t* curr_positions1 = index1_->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+          const uint32_t* curr_positions2 = index2_->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
 
           // This is similar to doing a merge on the positions, since they are in sorted order.
           size_t i1 = 0;
@@ -214,7 +214,7 @@ void IndexDiff::Print(Index* index, const char* term, int term_len) {
     printf("%u, %u, <", index->curr_doc_id(), curr_frequency);
 
     if (includes_positions_) {
-      const uint32_t* curr_positions = index->curr_list_data()->curr_block()->GetCurrChunk()->GetCurrentPositions();
+      const uint32_t* curr_positions = index->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
       for (size_t i = 0; i < curr_frequency; ++i) {
         printf("%u", curr_positions[i]);
         if (i != (curr_frequency - 1))
@@ -227,12 +227,14 @@ void IndexDiff::Print(Index* index, const char* term, int term_len) {
 }
 
 int IndexDiff::WhichIndex(Index* index) {
-  if (index == index1_)
+  if (index == index1_) {
     return 1;
-  else if (index == index2_)
+  } else if (index == index2_) {
     return 2;
-  else
+  } else {
     assert(false);
+    return 0;
+  }
 }
 
 IndexDiff::~IndexDiff() {

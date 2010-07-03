@@ -38,11 +38,10 @@
 #include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
-#include "ir_toolkit.h"
 #include "logger.h"
 #include "posting_collection.h"
+#include "uncompress_file.h"
 using namespace std;
-using namespace logger;
 
 /**************************************************************************************************************************************************************
  * Document
@@ -112,7 +111,7 @@ void IndexCollection::ParseTrec() {
     i->set_initial_doc_id(doc_id_);
     int num_docs_parsed = parser_.ParseDocumentCollection(document_collection_buffer_, document_collection_buffer_len, doc_id_, avg_doc_length_);
     i->set_processed(true);
-    GetDefaultLogger().Log("Found: " + Stringify(num_docs_parsed) + " documents.", false);
+    GetDefaultLogger().Log("Found: " + logger::Stringify(num_docs_parsed) + " documents.", false);
     i->set_final_doc_id(doc_id_ - 1);
   }
 

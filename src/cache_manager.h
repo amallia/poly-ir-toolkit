@@ -182,16 +182,21 @@ public:
 
   virtual void FreeBlock(uint64_t block_num) = 0;
 
+  uint64_t total_index_blocks() {
+    return kTotalIndexBlocks;
+  }
+
   static const uint64_t kBlockSize = BLOCK_SIZE;  // The block size in number of bytes.
 
 protected:
   static const uint64_t kIndexSizedCache;  // Sentinel value that when passed into the constructor as the 'cache_size' parameter, will cause the cache manager
                                            // to allocate as much space for the cache as there are blocks in the whole index.
-  const int index_fd_;                     // File descriptor for the inverted index file.
+  const int kIndexFd;                      // File descriptor for the inverted index file.
+  const uint64_t kTotalIndexBlocks;        // The total number of blocks in this inverted index file.
   const uint64_t kCacheSize;               // Size of this cache in number of blocks.
   uint32_t* block_cache_;                  // Pointer to the memory allocated for the block cache.
 private:
-  uint64_t CalculateCacheSize() const;
+  uint64_t CalculateTotalIndexBlocks() const;
 };
 
 /**************************************************************************************************************************************************************

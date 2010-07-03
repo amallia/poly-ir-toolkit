@@ -47,7 +47,8 @@ public:
   IndexMerger(const std::vector<IndexFiles>& input_index_files, const IndexFiles& out_index_files);
   ~IndexMerger();
 
-  void Merge();
+  void StartMerge();
+  float QueryProgress() const;
 
 private:
   void MergeOneHeap();
@@ -81,13 +82,21 @@ private:
 class CollectionMerger {
 public:
   CollectionMerger(int num_initial_indices, int merge_degree, bool delete_merged_files);
-  CollectionMerger(std::vector<IndexFiles>& input_index_files, int merge_degree, bool delete_merged_files);
+  CollectionMerger(const std::vector<IndexFiles>& input_index_files, int merge_degree, bool delete_merged_files);
+  CollectionMerger(const std::vector<IndexFiles>& input_index_files, const IndexFiles& output_index_files, bool delete_merged_files);
 
-  void Partition(const std::vector<IndexFiles>& input_index_files, int pass_num, int num_passes);
+  void Partition(const std::vector<IndexFiles>& input_index_files, int pass_num);
+  float CurrentMergeProgress() const;
 
 private:
+  int GetNumPasses(int num_indices, int merge_degree) const;
+  void RemoveIndexFiles(const IndexFiles& index_files);
+  void RenameIndexFiles(const IndexFiles& curr_index_files, const IndexFiles& final_index_files);
+
   const int kMergeDegree;
   const bool kDeleteMergedFiles;
+  IndexMerger* curr_merger_;
+  bool curr_merger_active_;
 };
 
 #endif /* INDEX_MERGE_H_ */

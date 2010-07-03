@@ -33,6 +33,7 @@
 #define TIMER_H_
 
 #include <cstdlib>
+#include <ctime>
 
 #include <sys/time.h>
 
@@ -42,7 +43,11 @@ public:
   double GetElapsedTime();
 
 private:
-  timeval start_time_;
+  double GetElapsedTimeStd();
+  double GetElapsedTimeSys();
+
+  clock_t start_time_std_;
+  timeval start_time_sys_;
 };
 
 #endif /* TIMER_H_ */

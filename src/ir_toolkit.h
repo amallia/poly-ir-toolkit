@@ -34,17 +34,4 @@
 class IndexCollection;
 IndexCollection& GetIndexCollection();
 
-// Uncompresses data pointed by 'src' with length 'src_len' into 'dest'.
-// 'dest' will be resized as necessary to completely decompress the 'src' data.
-// Upon completion, 'dest_len' will hold the length of the decompressed data,
-// 'dest' will point to the start of the decompressed data, and 'dest_size'
-// will hold the complete size of the 'dest' buffer, since it could be resized.
-int Uncompress(const unsigned char* src, int src_len, unsigned char** dest, int* dest_size, int* dest_len);
-
-// Uses 'Uncompress()' to decompress the gzipped file with filename 'file_path'.
-// 'dest' is a pointer to the buffer pointer where the file will be decompressed to; it may change if the allocated buffer was not large enough.
-// 'dest_size' is a pointer to the size of the destination buffer; it may change if the allocated buffer was not large enough.
-// 'dest_len' is a pointer to the length of the destination buffer; this function will store the number of valid bytes in the decompressed buffer in 'dest_len'.
-void UncompressFile(const char* file_path, char** dest, int* dest_size, int* dest_len);
-
 #endif /* IR_TOOLKIT_H_ */

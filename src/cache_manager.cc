@@ -56,25 +56,26 @@ const uint64_t CacheManager::kBlockSize;  // Initialized in the class definition
 const uint64_t CacheManager::kIndexSizedCache = numeric_limits<uint64_t>::max();
 
 CacheManager::CacheManager(const char* index_filename, uint64_t cache_size) :
-  index_fd_(open(index_filename, O_RDONLY)), kCacheSize(cache_size == CacheManager::kIndexSizedCache ? CalculateCacheSize() : cache_size),
+  kIndexFd(open(index_filename, O_RDONLY)), kTotalIndexBlocks(CalculateTotalIndexBlocks()),
+      kCacheSize(cache_size == CacheManager::kIndexSizedCache ? kTotalIndexBlocks : cache_size),
       block_cache_(new uint32_t[kBlockSize * kCacheSize / sizeof(*block_cache_)]) {
   assert(kCacheSize != 0);
-  if (index_fd_ < 0) {
+  if (kIndexFd < 0) {
     GetErrorLogger().LogErrno("open() in CacheManager::CacheManager(), trying to open index file", errno, true);
   }
 }
 
 CacheManager::~CacheManager() {
-  int close_ret = close(index_fd_);
+  int close_ret = close(kIndexFd);
   if (close_ret < 0) {
     GetErrorLogger().LogErrno("close() in CacheManager::~CacheManager(), trying to close index file", errno, false);
   }
   delete[] block_cache_;
 }
 
-uint64_t CacheManager::CalculateCacheSize() const {
+uint64_t CacheManager::CalculateTotalIndexBlocks() const {
   struct stat stat_buf;
-  if (fstat(index_fd_, &stat_buf) < 0) {
+  if (fstat(kIndexFd, &stat_buf) < 0) {
     GetErrorLogger().LogErrno("fstat() in CacheManager::CalculateCacheSize()", errno, true);
   }
   assert(stat_buf.st_size % kBlockSize == 0);
@@ -146,7 +147,9 @@ int LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_blo
             struct aiocb* cblist[1];
             cblist[0] = cache_block_info_.aiocb(invalidated_cache_block);
             int aio_suspend_ret = aio_suspend(cblist, 1, NULL);
-            assert(aio_suspend_ret == 0);
+            if (aio_suspend_ret < 0) {
+              GetErrorLogger().LogErrno("aio_suspend() in LruCachePolicy::QueueBlocks()", errno, true);
+            }
           }
         }
 
@@ -163,7 +166,7 @@ int LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_blo
       struct aiocb* curr_aiocb = cache_block_info_.aiocb(cache_block);
 
       // Initialize the necessary fields in the current aiocb.
-      curr_aiocb->aio_fildes = index_fd_;
+      curr_aiocb->aio_fildes = kIndexFd;
       curr_aiocb->aio_buf = buffer;
       curr_aiocb->aio_lio_opcode = LIO_READ;
       curr_aiocb->aio_nbytes = kBlockSize;
@@ -185,7 +188,9 @@ int LruCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_blo
   pthread_mutex_unlock(&query_mutex_);  // Safe to unlock the mutex because from this point on, not modifying any global or classwise structures.
 
   int lio_listio_ret = lio_listio(LIO_NOWAIT, aiocb_list, curr_aiocb_list_item, NULL);
-  assert(lio_listio_ret == 0);
+  if (lio_listio_ret < 0) {
+    GetErrorLogger().LogErrno("lio_listio() in LruCachePolicy::QueueBlocks()", errno, true);
+  }
 
   return num_disk_blocks;
 }
@@ -272,14 +277,19 @@ uint32_t* MergingCachePolicy::GetBlock(uint64_t block_num) {
 
 void MergingCachePolicy::FillCache(uint64_t block_num) {
   // Fill cache with the next 'kCacheSize' blocks starting from 'block_num'.
-  lseek(index_fd_, block_num * kBlockSize, SEEK_SET);
-  int read_ret = read(index_fd_, block_cache_, kBlockSize * kCacheSize);
+  lseek(kIndexFd, block_num * kBlockSize, SEEK_SET);
+  int read_ret = read(kIndexFd, block_cache_, kBlockSize * kCacheSize);
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in MergingCachePolicy::FillCache()", errno, true);
+  }
   // We're reading in at most 'kBlockSize * kCacheSize' bytes, since an index might have less blocks left than we want to read, so it could be lower.
-  assert(read_ret != -1 && read_ret % kBlockSize == 0);
+  assert(read_ret % kBlockSize == 0);
   initial_cache_block_num_ = block_num;
 }
 
 // Returns the number of blocks read in from the disk (all of them).
+// For the last time QueueBlocks() is called, it will not necessarily return the correct number of blocks read from disk,
+// because there might have been more blocks requested than there are left in the index.
 int MergingCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
   // Nothing to be done when merging.
   return ending_block_num - starting_block_num;
@@ -306,16 +316,32 @@ uint32_t* FullContiguousCachePolicy::GetBlock(uint64_t block_num) {
 }
 
 void FullContiguousCachePolicy::FillCache() {
-  int read_ret = read(index_fd_, block_cache_, kBlockSize * kCacheSize);
+  struct stat stat_buf;
+  if (fstat(kIndexFd, &stat_buf) < 0) {
+    GetErrorLogger().LogErrno("fstat() in FullContiguousCachePolicy::FillCache()", errno, true);
+  }
+
+  uint64_t total_data_read = 0;
+  const int kReadSize = stat_buf.st_blksize;  // Preferred block size for I/O for the file.
+  char* curr_read_location = reinterpret_cast<char*> (block_cache_);
+
+  ssize_t read_ret;
+  while ((read_ret = read(kIndexFd, curr_read_location, kReadSize)) > 0) {
+    total_data_read += read_ret;
+    curr_read_location += read_ret;
+  }
+
   if (read_ret < 0) {
     GetErrorLogger().LogErrno("read() in FullContiguousCachePolicy::FillCache()", errno, true);
   }
-  assert(static_cast<uint64_t> (read_ret) == kBlockSize * kCacheSize);
+  assert(static_cast<uint64_t> (total_data_read) == kBlockSize * kCacheSize);
 }
 
-// Returns the number of blocks read in from the disk (all of them).
+// Returns the number of blocks read in from the disk (none, since the index was fully loaded into memory).
+// For the last time QueueBlocks() is called, it will not necessarily return the correct number of blocks read from disk,
+// because there might have been more blocks requested than there are left in the index.
 int FullContiguousCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
-  return ending_block_num - starting_block_num;
+  return 0;
 }
 
 void FullContiguousCachePolicy::FreeBlock(uint64_t block_num) {
