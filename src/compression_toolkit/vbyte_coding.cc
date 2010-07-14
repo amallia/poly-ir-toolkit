@@ -46,6 +46,8 @@ int vbyte_coding::get_type() {
 int vbyte_coding::Compression(unsigned int* input, unsigned int* output, int size) {
   unsigned char* curr_byte = reinterpret_cast<unsigned char*> (output);
 
+  unsigned int bp = 0;  // Current byte pointer into the 'output' array which we use to set each word in the 'output' array to 0 before decoding to it.
+                        // This which prevents uninitialized data errors in Valgrind.
   unsigned int n;
   for (int i = 0; i < size; ++i) {
     n = input[i];
@@ -60,16 +62,22 @@ int vbyte_coding::Compression(unsigned int* input, unsigned int* output, int siz
     for (int i = 4; i > 0; --i) {
       if (_barray[i] != 0 || started == true) {
         started = true;
+        if ((bp & 3) == 0)
+          output[bp >> 2] = 0;
         *curr_byte = _barray[i] | 0x1;
         ++curr_byte;
+        ++bp;
       }
     }
 
+    if ((bp & 3) == 0)
+      output[bp >> 2] = 0;
     *curr_byte = _barray[0];
     ++curr_byte;
+    ++bp;
   }
 
-  return (reinterpret_cast<unsigned int*> (curr_byte) - output) + 1;
+  return (bp >> 2) + ((bp & 3) != 0 ? 1 : 0);
 }
 
 int vbyte_coding::Decompression(unsigned int* input, unsigned int* output, int size) {
@@ -93,5 +101,6 @@ int vbyte_coding::Decompression(unsigned int* input, unsigned int* output, int s
     output[i] = n;
   }
 
-  return (reinterpret_cast<unsigned int*> (curr_byte) - input) + 1;
+  int num_bytes_consumed = (curr_byte - reinterpret_cast<unsigned char*> (input));
+  return (num_bytes_consumed >> 2) + ((num_bytes_consumed & 3) != 0 ? 1 : 0);
 }
