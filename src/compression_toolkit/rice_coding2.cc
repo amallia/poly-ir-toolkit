@@ -60,6 +60,7 @@ int rice_coding2::get_type() {
 }
 
 void rice_coding2::set_size(int size) {
+  // TODO: What are the block size limitations for Turbo Rice Coding? Must be multiple of 32?
   block_size = size;
 }
 
