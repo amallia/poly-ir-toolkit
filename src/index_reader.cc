@@ -47,12 +47,6 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-//#include "compression_toolkit/pfor_coding.h"
-//#include "compression_toolkit/rice_coding.h"
-//#include "compression_toolkit/rice_coding2.h"
-//#include "compression_toolkit/s9_coding.h"
-//#include "compression_toolkit/s16_coding.h"
-//#include "compression_toolkit/vbyte_coding.h"
 #include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
@@ -66,23 +60,23 @@ using namespace std;
  * ChunkDecoder
  *
  **************************************************************************************************************************************************************/
-const int ChunkDecoder::kChunkSize;  // Initialized in the class definition.
+const int ChunkDecoder::kChunkSize;      // Initialized in the class definition.
 const int ChunkDecoder::kMaxProperties;  // Initialized in the class definition.
 
-ChunkDecoder::ChunkDecoder() :
+ChunkDecoder::ChunkDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor,
+                           const CodingPolicy& position_decompressor) :
   num_docs_(0), curr_document_offset_(-1), prev_document_offset_(0), curr_position_offset_(0), prev_decoded_doc_id_(0), num_positions_(0),
-      decoded_properties_(false), curr_buffer_position_(NULL), decoded_(false) {
+      decoded_properties_(false), curr_buffer_position_(NULL), decoded_(false), doc_id_decompressor_(doc_id_decompressor),
+      frequency_decompressor_(frequency_decompressor), position_decompressor_(position_decompressor) {
 }
 
 void ChunkDecoder::InitChunk(const ChunkProperties& properties, const uint32_t* buffer, int num_docs) {
-  // TODO: Try to eliminate unnecessary initializations if possible. Same for the BlockDecoder initialization.
   properties_ = properties;
   num_docs_ = num_docs;
-  curr_document_offset_ = -1;  // TODO: -1 signals that we haven't had an intersection yet...
+  curr_document_offset_ = -1;  // -1 signals that we haven't had an intersection yet.
   prev_document_offset_ = 0;
   curr_position_offset_ = 0;
   prev_decoded_doc_id_ = 0;
-//  num_positions_ = 0;
   decoded_properties_ = false;
   curr_buffer_position_ = buffer;
   decoded_ = false;
@@ -90,17 +84,11 @@ void ChunkDecoder::InitChunk(const ChunkProperties& properties, const uint32_t* 
 
 void ChunkDecoder::DecodeDocIds() {
   assert(curr_buffer_position_ != NULL);
+  if (doc_id_decompressor_.primary_coder_is_blockwise())
+    assert(doc_id_decompressor_.block_size() == kChunkSize);
 
   // A word is meant to be sizeof(uint32_t) bytes in this context.
-//  int num_words_consumed = doc_id_decompressor.Decompression(const_cast<uint32_t*> (curr_buffer_position_), doc_ids_, num_docs_);
-
-  ////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-  // PForDelta coding with total padding, results in bad compression.
-  doc_id_decompressor.set_size(ChunkDecoder::kChunkSize);
-  // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = doc_id_decompressor.Decompression(const_cast<uint32_t*>(curr_buffer_position_), doc_ids_, num_docs_);
-  ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
+  int num_words_consumed = doc_id_decompressor_.Decompress(const_cast<uint32_t*> (curr_buffer_position_), doc_ids_, num_docs_);
   curr_buffer_position_ += num_words_consumed;
   decoded_ = true;
 }
@@ -110,15 +98,17 @@ void ChunkDecoder::DecodeProperties() {
   if (properties_.includes_positions)
     curr_buffer_position_ += DecodePositions(curr_buffer_position_);
 
-  curr_buffer_position_ = NULL;  // This pointer is no longer valid
+  curr_buffer_position_ = NULL;  // This pointer is no longer valid.
   decoded_properties_ = true;
 }
 
 int ChunkDecoder::DecodeFrequencies(const uint32_t* compressed_frequencies) {
   assert(compressed_frequencies != NULL);
-
   // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = frequency_decompressor.Decompression(const_cast<uint32_t*> (compressed_frequencies), frequencies_, num_docs_);
+  if (frequency_decompressor_.primary_coder_is_blockwise())
+    assert(frequency_decompressor_.block_size() == kChunkSize);
+
+  int num_words_consumed = frequency_decompressor_.Decompress(const_cast<uint32_t*> (compressed_frequencies), frequencies_, num_docs_);
   return num_words_consumed;
 }
 
@@ -133,37 +123,12 @@ int ChunkDecoder::DecodePositions(const uint32_t* compressed_positions) {
   }
 
   assert(num_positions_ <= (ChunkDecoder::kChunkSize * ChunkDecoder::kMaxProperties));
+  if (position_decompressor_.primary_coder_is_blockwise())
+    assert(position_decompressor_.block_size() >= kChunkSize);
 
-  pfor_coding decompressor;  // TODO: Declare as a class member.
-  decompressor.set_size(ChunkDecoder::kChunkSize);
-
-  // TODO: Make sure parameter matches in encoding code (make global setting).
-  const int kPadUnless = 100;  // Pad unless we have < kPadUntil documents left to code into a block.
-
-  int num_whole_chunklets = num_positions_ / ChunkDecoder::kChunkSize;
-  int compressed_positions_offset = 0;
-  int decompressed_positions_offset = 0;
-  while (num_whole_chunklets-- > 0) {
-    compressed_positions_offset += decompressor.Decompression(const_cast<uint32_t*> (compressed_positions) + compressed_positions_offset, positions_
-        + decompressed_positions_offset, ChunkDecoder::kChunkSize);
-    decompressed_positions_offset += ChunkDecoder::kChunkSize;
-  }
-
-  int positions_left = num_positions_ % ChunkDecoder::kChunkSize;
-  if (positions_left == 0) {
-    // Nothing to do here.
-  } else if (positions_left < kPadUnless) {
-    // Decode leftover portion with a non-blockwise decompressor.
-    s16_coding leftover_decompressor;
-    compressed_positions_offset += leftover_decompressor.Decompression(const_cast<uint32_t*> (compressed_positions) + compressed_positions_offset, positions_
-        + decompressed_positions_offset, positions_left);
-  } else {
-    // Decode leftover portion with a blockwise decompressor, since it was padded to the blocksize.
-    compressed_positions_offset += decompressor.Decompression(const_cast<uint32_t*> (compressed_positions) + compressed_positions_offset, positions_
-        + decompressed_positions_offset, ChunkDecoder::kChunkSize);
-  }
-
-  return compressed_positions_offset;
+  // A word is meant to be sizeof(uint32_t) bytes in this context.
+  int num_words_consumed = position_decompressor_.Decompress(const_cast<uint32_t*> (compressed_positions), positions_, num_positions_);
+  return num_words_consumed;
 }
 
 void ChunkDecoder::UpdatePropertiesOffset() {
@@ -179,12 +144,15 @@ void ChunkDecoder::UpdatePropertiesOffset() {
  * BlockDecoder
  *
  **************************************************************************************************************************************************************/
-BlockDecoder::BlockDecoder() :
-  curr_block_num_(0), num_chunks_(0), starting_chunk_(0), curr_chunk_(0), curr_block_data_(NULL), chunk_properties_(NULL), chunk_properties_size_(0) {
-}
+const int BlockDecoder::kBlockSize;                              // Initialized in the class definition.
+const int BlockDecoder::kChunkSizeLowerBound;                    // Initialized in the class definition.
+const int BlockDecoder::kChunkPropertiesDecompressedUpperbound;  // Initialized in the class definition.
 
-BlockDecoder::~BlockDecoder() {
-  delete[] chunk_properties_;
+BlockDecoder::BlockDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor,
+                           const CodingPolicy& block_header_decompressor) :
+  curr_block_num_(0), num_chunks_(0), starting_chunk_(0), curr_chunk_(0), curr_block_data_(NULL),
+      curr_chunk_decoder_(doc_id_decompressor, frequency_decompressor, position_decompressor),
+      block_header_decompressor_(block_header_decompressor) {
 }
 
 void BlockDecoder::InitBlock(uint64_t block_num, int starting_chunk, uint32_t* block_data) {
@@ -199,7 +167,7 @@ void BlockDecoder::InitBlock(uint64_t block_num, int starting_chunk, uint32_t* b
   assert(num_chunks_ > 0);
   curr_block_data_ += 1;
 
-  curr_block_data_ += DecompressHeader(curr_block_data_);
+  curr_block_data_ += DecodeHeader(curr_block_data_);
 
   // Adjust our block data pointer to point to the starting chunk of this particular list.
   for (int i = 0; i < starting_chunk_; ++i) {
@@ -209,33 +177,13 @@ void BlockDecoder::InitBlock(uint64_t block_num, int starting_chunk, uint32_t* b
   curr_chunk_decoder_.set_decoded(false);
 }
 
-int BlockDecoder::DecompressHeader(uint32_t* compressed_header) {
+int BlockDecoder::DecodeHeader(uint32_t* compressed_header) {
   int header_len = num_chunks_ * 2;  // Number of integer entries we have to decompress (two integers per chunk).
-
-  // TODO: Abstract away calculation of upper bound for S9/S16.
-  // For S9/S16 (due to the way it works internally), need to round number of compressed integers to a 'kS9S16MaxIntsPerWord' multiple
-  // and make sure there is at least 'kS9S16MaxIntsPerWord' extra space at the end of the array (hence the +2)
-  // to ensure there is ample room for decompression. Can also make 'kS9S16MaxIntsPerWord' a multiple of 2 (make it 32) and use shifts instead of
-  // division/multiplication to calculate the upper bound.
-  //const int kS9S16MaxIntsPerWord = 28; // In S9/S16 coding, for every compressed word, there is a case where it will have a max of 28 integers compressed within.
-  //int header_len_upper_bound = ((header_len / kS9S16MaxIntsPerWord) + 2) * kS9S16MaxIntsPerWord; // Slower to calculate, slightly smaller upper bound.
-  int header_len_upper_bound = ((header_len >> 5) + 2) << 5; // Faster to calculate, slightly larger upper bound.
-
-  // 'chunk_properties_' holds the last_doc_id followed by the size for every chunk in this block, in this order.
-  // TODO: Try putting an upper bound on this array so as to not make dynamic allocation. This will require lots of memory; each chunk will be at minimum.
-  // 3*sizeof(uint32_t) size in bytes (one int for doc id, frequency, position). Upper bound on the number of chunks will be
-  // ((block size) / (3*sizeof(uint32_t))).  Then need to do as above, and double this by 2 (we have 2 ints to decode per chunk) and do an upper bound for
-  // S9/S16 coding as above. What is the impact on performance and memory usage?
-
-  // Allocate twice as much as necessary to reduce allocations in general.
-  if(header_len_upper_bound > chunk_properties_size_) {
-    delete[] chunk_properties_;
-    chunk_properties_size_ = header_len_upper_bound * 2;
-    chunk_properties_ = new uint32_t[chunk_properties_size_];
-  }
+  if (header_len > kChunkPropertiesDecompressedUpperbound)
+    assert(false);
 
   // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = header_decompressor.Decompression(compressed_header, chunk_properties_, header_len);
+  int num_words_consumed = block_header_decompressor_.Decompress(compressed_header, chunk_properties_, header_len);
   return num_words_consumed;
 }
 
@@ -243,11 +191,13 @@ int BlockDecoder::DecompressHeader(uint32_t* compressed_header) {
  * ListData
  *
  **************************************************************************************************************************************************************/
-ListData::ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager) :
+ListData::ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
+                   const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor,
+                   const CodingPolicy& block_header_decompressor) :
   kReadAheadBlocks(atol(Configuration::GetConfiguration().GetValue(config_properties::kReadAheadBlocks).c_str())), cache_manager_(cache_manager),
       initial_block_num_(initial_block_num), last_queued_block_num_(initial_block_num + kReadAheadBlocks), curr_block_num_(initial_block_num_),
-      num_docs_(num_docs), num_docs_left_(num_docs_),
-      num_chunks_((num_docs / ChunkDecoder::kChunkSize) + ((num_docs % ChunkDecoder::kChunkSize == 0) ? 0 : 1)),
+      curr_block_decoder_(doc_id_decompressor, frequency_decompressor, position_decompressor, block_header_decompressor), num_docs_(num_docs),
+      num_docs_left_(num_docs_), num_chunks_((num_docs / ChunkDecoder::kChunkSize) + ((num_docs % ChunkDecoder::kChunkSize == 0) ? 0 : 1)),
       prev_block_last_doc_id_(0), cached_bytes_read_(0), disk_bytes_read_(0) {
   if (kReadAheadBlocks <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kReadAheadBlocks) + "'", true);
@@ -459,18 +409,27 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
                          const char* doc_map_filename, const char* meta_info_filename) :
   purpose_(purpose), document_order_(document_order), kLexiconSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kLexiconSize).c_str())),
       lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)), cache_manager_(cache_manager), includes_contexts_(false),
-      includes_positions_(false), total_cached_bytes_read_(0), total_disk_bytes_read_(0), total_num_lists_accessed_(0) {
+      includes_positions_(false), doc_id_decompressor_(CodingPolicy::kDocId), frequency_decompressor_(CodingPolicy::kFrequency),
+      position_decompressor_(CodingPolicy::kPosition), block_header_decompressor_(CodingPolicy::kBlockHeader), total_cached_bytes_read_(0),
+      total_disk_bytes_read_(0), total_num_lists_accessed_(0) {
   if (kLexiconSize <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kLexiconSize) + "'", true);
   }
 
   LoadMetaInfo(meta_info_filename);
+
+  coding_policy_helper::LoadPolicyAndCheck(doc_id_decompressor_, meta_info_.GetValue(meta_properties::kIndexDocIdCoding), "docID");
+  coding_policy_helper::LoadPolicyAndCheck(frequency_decompressor_, meta_info_.GetValue(meta_properties::kIndexFrequencyCoding), "frequency");
+  coding_policy_helper::LoadPolicyAndCheck(position_decompressor_, meta_info_.GetValue(meta_properties::kIndexPositionCoding), "position");
+  coding_policy_helper::LoadPolicyAndCheck(block_header_decompressor_, meta_info_.GetValue(meta_properties::kIndexBlockHeaderCoding), "block header");
+
   LoadDocMap(doc_map_filename);
 }
 
 ListData* IndexReader::OpenList(const LexiconData& lex_data) {
   assert(lex_data.block_number() >= 0 && lex_data.chunk_number() >= 0 && lex_data.num_docs() >= 0);
-  ListData* list_data = new ListData(lex_data.block_number(), lex_data.chunk_number(), lex_data.num_docs(), cache_manager_);
+  ListData* list_data = new ListData(lex_data.block_number(), lex_data.chunk_number(), lex_data.num_docs(), cache_manager_,
+                                     doc_id_decompressor_, frequency_decompressor_, position_decompressor_, block_header_decompressor_);
   return list_data;
 }
 

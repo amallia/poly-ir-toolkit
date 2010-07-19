@@ -44,6 +44,9 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "coding_policy_helper.h"
+#include "config_file_properties.h"
+#include "configuration.h"
 #include "globals.h"
 #include "index_build.h"
 #include "index_reader.h"
@@ -57,9 +60,17 @@ using namespace std;
  *
  **************************************************************************************************************************************************************/
 IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const IndexFiles& out_index_files) :
-  out_index_files_(out_index_files), index_builder_(new IndexBuilder(out_index_files_.lexicon_filename().c_str(), out_index_files_.index_filename().c_str())),
-      includes_contexts_(true), includes_positions_(true), total_num_docs_(0), total_unique_num_docs_(0), total_document_lengths_(0),
-      document_posting_count_(0), index_posting_count_(0), first_doc_id_in_index_(0), last_doc_id_in_index_(0) {
+  out_index_files_(out_index_files), index_builder_(NULL), includes_contexts_(true), includes_positions_(true), doc_id_compressor_(CodingPolicy::kDocId),
+      frequency_compressor_(CodingPolicy::kFrequency), position_compressor_(CodingPolicy::kPosition), block_header_compressor_(CodingPolicy::kBlockHeader),
+      total_num_docs_(0), total_unique_num_docs_(0), total_document_lengths_(0), document_posting_count_(0), index_posting_count_(0),
+      first_doc_id_in_index_(0), last_doc_id_in_index_(0) {
+  coding_policy_helper::LoadPolicyAndCheck(doc_id_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingDocIdCoding), "docID");
+  coding_policy_helper::LoadPolicyAndCheck(frequency_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingFrequencyCoding), "frequency");
+  coding_policy_helper::LoadPolicyAndCheck(position_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingPositionCoding), "position");
+  coding_policy_helper::LoadPolicyAndCheck(block_header_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingBlockHeaderCoding), "block header");
+
+  index_builder_ = new IndexBuilder(out_index_files_.lexicon_filename().c_str(), out_index_files_.index_filename().c_str(), block_header_compressor_);
+
   for (size_t i = 0; i < input_index_files.size(); ++i) {
     const IndexFiles& curr_index_files = input_index_files[i];
 
@@ -142,8 +153,8 @@ IndexMerger::~IndexMerger() {
 
 // TODO: MergeOneHeap() algorithm seems slower than MergeTwoHeaps(). But what about on very long lists?
 void IndexMerger::StartMerge() {
-  MergeOneHeap();
-//  MergeTwoHeaps();
+//  MergeOneHeap();
+  MergeTwoHeaps();
 
   index_builder_->Finalize();
   WriteMetaFile();
@@ -161,10 +172,22 @@ void IndexMerger::MergeOneHeap() {
 
   int doc_ids_offset = 0;
   int properties_offset = 0;
-  uint32_t doc_ids[Chunk::kChunkSize];
-  uint32_t frequencies[Chunk::kChunkSize];
-  uint32_t positions[Chunk::kChunkSize * Chunk::kMaxProperties];
-  unsigned char contexts[Chunk::kChunkSize * Chunk::kMaxProperties];
+
+  // Since the following input arrays will be used as input to the various coding policies, and the coding policy might apply a blockwise coding compressor
+  // (which would pad the array to the block size), the following rules apply:
+  // For the docID and frequency arrays, the block size is expected to be the chunk size.
+  // For the position and context arrays, the block size is expected to be a multiple of the maximum positions/contexts possible for a particular docID.
+  // Some alternative designs would be to define a fixed maximum block size and make sure the arrays are properly sized for this maximum
+  // (the position/context arrays in particular).
+  // Another alternative is to make these arrays dynamically allocated.
+  assert(doc_id_compressor_.block_size() == 0 || ChunkEncoder::kChunkSize == doc_id_compressor_.block_size());
+  assert(frequency_compressor_.block_size() == 0 || ChunkEncoder::kChunkSize == frequency_compressor_.block_size());
+  assert(position_compressor_.block_size() == 0 || (ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties) % position_compressor_.block_size() == 0);
+
+  uint32_t doc_ids[ChunkEncoder::kChunkSize];
+  uint32_t frequencies[ChunkEncoder::kChunkSize];
+  uint32_t positions[ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties];
+  unsigned char contexts[ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties];
 
   uint32_t prev_chunk_last_doc_id = 0;
   uint32_t prev_doc_id = 0;
@@ -172,7 +195,6 @@ void IndexMerger::MergeOneHeap() {
   // Initialize the heap.
   for (size_t i = 0; i < indices_.size(); ++i) {
     Index* index = indices_[i];
-
     if (index->NextTerm() && index->NextDocId())
       heap[heap_size++] = index;
   }
@@ -196,7 +218,7 @@ void IndexMerger::MergeOneHeap() {
       }
 
       doc_ids[doc_ids_offset] = top_list->curr_doc_id() - prev_doc_id;
-      // Check for duplicate doc ids (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero), which is considered a bug.
+      // Check for duplicate docIDs (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero), which is considered a bug.
       // But since 'prev_doc_id' is initialized to 0, which is a valid doc,
       // we have a case where the 'top_list->curr_doc_id()' could start from 0, which is an exception to the rule.
       // Thus, if this is the first iteration and 'top_list->curr_doc_id()' is 0, it is an acceptable case.
@@ -207,10 +229,12 @@ void IndexMerger::MergeOneHeap() {
       ++doc_ids_offset;
       properties_offset += curr_frequency;
 
-      if (doc_ids_offset == Chunk::kChunkSize) {
-        Chunk* chunk = new Chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset, properties_offset, prev_chunk_last_doc_id);
-        prev_chunk_last_doc_id = chunk->last_doc_id();
-        index_builder_->Add(*chunk, curr_term, curr_term_len);
+      if (doc_ids_offset == ChunkEncoder::kChunkSize) {
+        ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
+                                           doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
+                                           position_compressor_);
+        prev_chunk_last_doc_id = chunk.last_doc_id();
+        index_builder_->Add(chunk, curr_term, curr_term_len);
 
         doc_ids_offset = 0;
         properties_offset = 0;
@@ -229,8 +253,10 @@ void IndexMerger::MergeOneHeap() {
     } else {
       // A new list found, so we have to dump the chunk from the previous list, if any.
       if (doc_ids_offset > 0) {
-        Chunk* chunk = new Chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset, properties_offset, prev_chunk_last_doc_id);
-        index_builder_->Add(*chunk, curr_term, curr_term_len);
+        ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
+                                           doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
+                                           position_compressor_);
+        index_builder_->Add(chunk, curr_term, curr_term_len);
       }
 
       if (top_list->curr_term_len() > curr_term_size) {
@@ -253,10 +279,13 @@ void IndexMerger::MergeOneHeap() {
 
   // Leftover chunk.
   if (doc_ids_offset > 0) {
-    Chunk* chunk = new Chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset, properties_offset, prev_chunk_last_doc_id);
-    index_builder_->Add(*chunk, curr_term, curr_term_len);
+    ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
+    index_builder_->Add(chunk, curr_term, curr_term_len);
   }
+
   delete[] curr_term;
+  delete[] heap;
 }
 
 void IndexMerger::MergeTwoHeaps() {
@@ -266,7 +295,6 @@ void IndexMerger::MergeTwoHeaps() {
   // Initialize the list heap.
   for (size_t i = 0; i < indices_.size(); ++i) {
     Index* index = indices_[i];
-
     if (index->NextTerm())
       list_heap[list_heap_size++] = index;
   }
@@ -296,15 +324,21 @@ void IndexMerger::MergeTwoHeaps() {
         if (num_same_term_indices > 0)
           PrepareLists(list_heap, &list_heap_size, same_term_indices, &num_same_term_indices, curr_term, curr_term_len);
 
-        curr_term = top_list->curr_term();
-        curr_term_len = top_list->curr_term_len();
+        curr_term = list_heap[0]->curr_term();
+        curr_term_len = list_heap[0]->curr_term_len();
       }
     } else if (num_same_term_indices > 0) {
       PrepareLists(list_heap, &list_heap_size, same_term_indices, &num_same_term_indices, curr_term, curr_term_len);
+
+      curr_term = list_heap[0]->curr_term();
+      curr_term_len = list_heap[0]->curr_term_len();
     } else {
       break;
     }
   }
+
+  delete[] same_term_indices;
+  delete[] list_heap;
 }
 
 void IndexMerger::PrepareLists(Index** list_heap, int* list_heap_size, Index** same_term_indices, int* num_same_term_indices, const char* term, int term_len) {
@@ -326,10 +360,22 @@ void IndexMerger::PrepareLists(Index** list_heap, int* list_heap_size, Index** s
 void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const char* term, int term_len) {
   int doc_ids_offset = 0;
   int properties_offset = 0;
-  uint32_t doc_ids[Chunk::kChunkSize];
-  uint32_t frequencies[Chunk::kChunkSize];
-  uint32_t positions[Chunk::kChunkSize * Chunk::kMaxProperties];
-  unsigned char contexts[Chunk::kChunkSize * Chunk::kMaxProperties];
+
+  // Since the following input arrays will be used as input to the various coding policies, and the coding policy might apply a blockwise coding compressor
+  // (which would pad the array to the block size), the following rules apply:
+  // For the docID and frequency arrays, the block size is expected to be the chunk size.
+  // For the position and context arrays, the block size is expected to be a multiple of the maximum positions/contexts possible for a particular docID.
+  // Some alternative designs would be to define a fixed maximum block size and make sure the arrays are properly sized for this maximum
+  // (the position/context arrays in particular).
+  // Another alternative is to make these arrays dynamically allocated.
+  assert(doc_id_compressor_.block_size() == 0 || ChunkEncoder::kChunkSize == doc_id_compressor_.block_size());
+  assert(frequency_compressor_.block_size() == 0 || ChunkEncoder::kChunkSize == frequency_compressor_.block_size());
+  assert(position_compressor_.block_size() == 0 || (ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties) % position_compressor_.block_size() == 0);
+
+  uint32_t doc_ids[ChunkEncoder::kChunkSize];
+  uint32_t frequencies[ChunkEncoder::kChunkSize];
+  uint32_t positions[ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties];
+  unsigned char contexts[ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties];
 
   uint32_t prev_chunk_last_doc_id = 0;
   uint32_t prev_doc_id = 0;
@@ -348,7 +394,7 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
     }
 
     doc_ids[doc_ids_offset] = top_list->curr_doc_id() - prev_doc_id;
-    // Check for duplicate doc ids (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero), which is considered a bug.
+    // Check for duplicate docIDs (when the difference between the 'top_list->curr_doc_id()' and 'prev_doc_id' is zero), which is considered a bug.
     // But since 'prev_doc_id' is initialized to 0, which is a valid doc,
     // we have a case where the 'top_list->curr_doc_id()' could start from 0, which is an exception to the rule.
     // Thus, if this is the first iteration and 'top_list->curr_doc_id()' is 0, it is an acceptable case.
@@ -359,10 +405,12 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
     ++doc_ids_offset;
     properties_offset += curr_frequency;
 
-    if (doc_ids_offset == Chunk::kChunkSize) {
-      Chunk* chunk = new Chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset, properties_offset, prev_chunk_last_doc_id);
-      prev_chunk_last_doc_id = chunk->last_doc_id();
-      index_builder_->Add(*chunk, term, term_len);
+    if (doc_ids_offset == ChunkEncoder::kChunkSize) {
+      ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
+                                         doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
+                                         position_compressor_);
+      prev_chunk_last_doc_id = chunk.last_doc_id();
+      index_builder_->Add(chunk, term, term_len);
 
       doc_ids_offset = 0;
       properties_offset = 0;
@@ -382,8 +430,9 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
 
   // Leftover chunk.
   if (doc_ids_offset > 0) {
-    Chunk* chunk = new Chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset, properties_offset, prev_chunk_last_doc_id);
-    index_builder_->Add(*chunk, term, term_len);
+    ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
+    index_builder_->Add(chunk, term, term_len);
   }
 }
 
@@ -400,6 +449,22 @@ void IndexMerger::WriteMetaFile() {
 
   metafile_values << includes_contexts_;
   index_metafile.AddKeyValuePair(meta_properties::kIncludesContexts, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kMergingDocIdCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexDocIdCoding, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kMergingFrequencyCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexFrequencyCoding, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kMergingPositionCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexPositionCoding, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kMergingBlockHeaderCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding, metafile_values.str());
   metafile_values.str("");
 
   metafile_values << total_document_lengths_;

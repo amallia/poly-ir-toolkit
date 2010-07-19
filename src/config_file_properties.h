@@ -57,12 +57,36 @@ static const char kIncludePositions[] = "include_positions";
 // Controls whether contexts will be indexed.
 static const char kIncludeContexts[] = "include_contexts";
 
+// The coding policy to be used for compressing the docIDs.
+static const char kIndexingDocIdCoding[] = "indexing_doc_id_coding";
+
+// The coding policy to be used for compressing the frequencies.
+static const char kIndexingFrequencyCoding[] = "indexing_frequency_coding";
+
+// The coding policy to be used for compressing the positions, if they are to be included.
+static const char kIndexingPositionCoding[] = "indexing_position_coding";
+
+// The coding policy to be used for compressing the block header.
+static const char kIndexingBlockHeaderCoding[] = "indexing_block_header_coding";
+
 /**************************************************************************************************************************************************************
  * Merging Parameters
  *
  **************************************************************************************************************************************************************/
 // Controls whether files that have already been merged should be deleted (Saves considerable disk space).
 static const char kDeleteMergedFiles[] = "delete_merged_files";
+
+// The coding policy to be used for compressing the docIDs.
+static const char kMergingDocIdCoding[] = "merging_doc_id_coding";
+
+// The coding policy to be used for compressing the frequencies.
+static const char kMergingFrequencyCoding[] = "merging_frequency_coding";
+
+// The coding policy to be used for compressing the positions, if they were included in the index.
+static const char kMergingPositionCoding[] = "merging_position_coding";
+
+// The coding policy to be used for compressing the block header.
+static const char kMergingBlockHeaderCoding[] = "merging_block_header_coding";
 
 /**************************************************************************************************************************************************************
  * Querying Parameters

@@ -109,7 +109,6 @@ private:
   // Keeps track of the number of queries issued.
   uint64_t total_num_queries_;
 
-
   // TODO: Finish this up.
   // Parameters used in scoring documents. They are dynamically allocated and resized as necessary.
   const int kInitialQuerySize;

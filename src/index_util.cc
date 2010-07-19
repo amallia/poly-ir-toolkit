@@ -99,7 +99,7 @@ bool Index::Next() {
 // Closes the list for the current term.
 // Then returns true if there is a next term (lexicographically) and changes state so as to open the corresponding list for this term.
 // Otherwise, if there is no next term, changes state so all relevant term and list pointers are NULL, and returns false.
-// Note: After calling this method, NextDocId() should be called prior to doing anything with the doc ids and any other data associated with them.
+// Note: After calling this method, NextDocId() should be called prior to doing anything with the docIDs and any other data associated with them.
 bool Index::NextTerm() {
   // Close the previous list before moving on to the next one.
   if (curr_list_data_ != NULL) {

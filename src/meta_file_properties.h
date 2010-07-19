@@ -40,6 +40,18 @@ static const char kIncludesPositions[] = "includes_positions";
 // Whether the index was indexed with context data.
 static const char kIncludesContexts[] = "includes_contexts";
 
+// The coding policy with which the docIDs are compressed.
+static const char kIndexDocIdCoding[] = "index_doc_id_coding";
+
+// The coding policy with which the frequencies are compressed.
+static const char kIndexFrequencyCoding[] = "index_frequency_coding";
+
+// The coding policy with which the positions are compressed, if they were included in the index.
+static const char kIndexPositionCoding[] = "index_position_coding";
+
+// The coding policy with which the block headers are compressed.
+static const char kIndexBlockHeaderCoding[] = "index_block_header_coding";
+
 // The sum of all document lengths in the index (length is based on the position of the last posting relating to a particular docID).
 static const char kTotalDocumentLengths[] = "total_document_lengths";
 

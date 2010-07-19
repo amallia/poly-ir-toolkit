@@ -35,6 +35,7 @@
 
 #include <vector>
 
+#include "coding_policy.h"
 #include "index_build.h"
 #include "index_util.h"
 
@@ -65,14 +66,20 @@ private:
   bool includes_contexts_;
   bool includes_positions_;
 
+  // Compressors to be used for various parts of the index.
+  CodingPolicy doc_id_compressor_;
+  CodingPolicy frequency_compressor_;
+  CodingPolicy position_compressor_;
+  CodingPolicy block_header_compressor_;
+
   // The following properties are derived from the individual index meta info files.
-  uint32_t total_num_docs_;  // The total number of documents in the merged index.
-  uint32_t total_unique_num_docs_;  // The total number of unique documents in the merged index.
+  uint32_t total_num_docs_;          // The total number of documents in the merged index.
+  uint32_t total_unique_num_docs_;   // The total number of unique documents in the merged index.
   uint64_t total_document_lengths_;  // The total document lengths of all documents in the merged index.
   uint64_t document_posting_count_;  // The total document posting count in the merged index.
-  uint64_t index_posting_count_;  // The total index posting count in the merged index.
-  uint32_t first_doc_id_in_index_;  // The first docID in the merged index.
-  uint32_t last_doc_id_in_index_;  // The last docID in the merged index.
+  uint64_t index_posting_count_;     // The total index posting count in the merged index.
+  uint32_t first_doc_id_in_index_;   // The first docID in the merged index.
+  uint32_t last_doc_id_in_index_;    // The last docID in the merged index.
 };
 
 /**************************************************************************************************************************************************************

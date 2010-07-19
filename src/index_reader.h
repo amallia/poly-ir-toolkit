@@ -36,17 +36,11 @@
 #include <stdint.h>
 
 #include "cache_manager.h"
+#include "coding_policy.h"
+#include "coding_policy_helper.h"
 #include "index_layout_parameters.h"
 #include "key_value_store.h"
 #include "term_hash_table.h"
-
-// TODO: These should be eventually abstracted away by the compression policy class.
-#include "compression_toolkit/pfor_coding.h"
-#include "compression_toolkit/rice_coding.h"
-#include "compression_toolkit/rice_coding2.h"
-#include "compression_toolkit/s9_coding.h"
-#include "compression_toolkit/s16_coding.h"
-#include "compression_toolkit/vbyte_coding.h"
 
 /**************************************************************************************************************************************************************
  * ChunkDecoder
@@ -60,7 +54,7 @@ public:
     bool includes_positions;
   };
 
-  ChunkDecoder();
+  ChunkDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor);
 
   void InitChunk(const ChunkProperties& properties, const uint32_t* buffer, int num_docs);
   void DecodeDocIds();
@@ -145,21 +139,16 @@ public:
   static const int kMaxProperties = MAX_FREQUENCY_PROPERTIES;
 
 private:
-  pfor_coding doc_id_decompressor;
-//  s16_coding doc_id_decompressor;
-  s9_coding frequency_decompressor;
+  ChunkProperties properties_;  // Controls aspects of how this chunk performs decoding.
 
-  // Controls aspects of how this chunk performs decoding.
-  ChunkProperties properties_;
+  int num_docs_;  // The number of documents in this chunk.
 
-  // The number of documents in this chunk.
-  int num_docs_;
-  // Array of decompressed doc ids. If stored gap coded, the gaps are not decoded here, but rather during query processing.
-  uint32_t doc_ids_[kChunkSize];
-  // Array of decompressed frequencies.
-  uint32_t frequencies_[kChunkSize];
-  // Array of decomrpessed positions. The position gaps are not decoded here, but rather during query processing, if necessary at all.
-  uint32_t positions_[(((kChunkSize * kMaxProperties) >> 5) + 2) << 5];  //TODO: Abstract away calculation of upper bound for S9/S16.
+  // These buffers are used for decompression of chunks.
+  uint32_t doc_ids_[UncompressedOutBufferUpperbound(kChunkSize)];                     // Array of decompressed docIDs. If stored gap coded, the gaps are not decoded here,
+                                                                                      // but rather during query processing.
+  uint32_t frequencies_[UncompressedOutBufferUpperbound(kChunkSize)];                 // Array of decompressed frequencies.
+  uint32_t positions_[UncompressedOutBufferUpperbound(kChunkSize * kMaxProperties)];  // Array of decomrpessed positions. The position gaps are not decoded here,
+                                                                                      // but rather during query processing, if necessary at all.
 
   int curr_document_offset_;      // The offset into the 'doc_ids_' array of the current document we're processing.
   int prev_document_offset_;      // The position we last stopped at when updating the 'curr_position_offset_'.
@@ -169,8 +158,15 @@ private:
   int num_positions_;             // Total number of decoded positions in this list.
   bool decoded_properties_;       // True when we have decoded the document properties (that is, frequencies, positions, etc).
                                   // Necessary because we don't want to decode the frequencies/contexts/positions until we're certain we actually need them.
+
   const uint32_t* curr_buffer_position_;  // Pointer to the raw data of stuff we have to decode next.
+
   bool decoded_;  // True when we have decoded the docIDs.
+
+  // Decompressors for various portions of the chunk.
+  const CodingPolicy& doc_id_decompressor_;
+  const CodingPolicy& frequency_decompressor_;
+  const CodingPolicy& position_decompressor_;
 };
 
 /**************************************************************************************************************************************************************
@@ -180,15 +176,15 @@ private:
  **************************************************************************************************************************************************************/
 class BlockDecoder {
 public:
-  BlockDecoder();
-  ~BlockDecoder();
+  BlockDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor,
+               const CodingPolicy& block_header_decompressor);
 
   void InitBlock(uint64_t block_num, int starting_chunk, uint32_t* block_data);
 
   // Decompresses the block header starting at the 'compressed_header' location in memory.
   // The last docIDs and sizes of chunks will be stored internally in this class after decoding,
   // and the memory freed during destruction.
-  int DecompressHeader(uint32_t* compressed_header);
+  int DecodeHeader(uint32_t* compressed_header);
 
   // Returns the last fully decoded docID of the ('chunk_idx'+1)th chunk in the block.
   uint32_t chunk_last_doc_id(int chunk_idx) const {
@@ -246,16 +242,26 @@ public:
     ++curr_chunk_;
   }
 
+  static const int kBlockSize = BLOCK_SIZE;
+
 private:
-  uint64_t curr_block_num_;          // The current block number.
-  int num_chunks_;                   // The total number of chunks this block holds, regardless of which list it is.
-  int starting_chunk_;               // The chunk number of the first chunk in the block of the associated list.
-  int curr_chunk_;                   // The current actual chunk number we're up to within a block.
-  uint32_t* curr_block_data_;        // Points to the start of the next chunk to be decoded.
-  uint32_t* chunk_properties_;       // For each chunk, holds it's size (in words, where a word is sizeof(uint32_t)) and last doc id.
-  int chunk_properties_size_;        // The current size of the 'chunk_properties_' array; it may be resized if necessary.
-  ChunkDecoder curr_chunk_decoder_;  // Decoder for the current chunk we're processing.
-  s16_coding header_decompressor;    // Decompressor for the block header.
+  static const int kChunkSizeLowerBound = MIN_COMPRESSED_CHUNK_SIZE;
+
+  // The upper bound on the number of chunk properties in a single block (with upperbounds for proper decompression by various coding policies),
+  // calculated by getting the max number of chunks in a block and multiplying by 2 properties per chunk.
+  static const int kChunkPropertiesDecompressedUpperbound = UncompressedOutBufferUpperbound(2 * (kBlockSize / kChunkSizeLowerBound));
+
+  // For each chunk in the block corresponding to this current BlockDecoder, holds the last docIDs and sizes,
+  // where the size is in words, and a word is sizeof(uint32_t). The last docID is always followed by the size, for every chunk, in this order.
+  uint32_t chunk_properties_[kChunkPropertiesDecompressedUpperbound];  // This will require ~11KiB of memory. Alternative is to make dynamic allocations and resize if necessary.
+
+  uint64_t curr_block_num_;                             // The current block number.
+  int num_chunks_;                                      // The total number of chunks this block holds, regardless of which list it is.
+  int starting_chunk_;                                  // The chunk number of the first chunk in the block of the associated list.
+  int curr_chunk_;                                      // The current actual chunk number we're up to within a block.
+  uint32_t* curr_block_data_;                           // Points to the start of the next chunk to be decoded.
+  ChunkDecoder curr_chunk_decoder_;                     // Decoder for the current chunk we're processing.
+  const CodingPolicy& block_header_decompressor_;       // Decompressor for the block header.
 };
 
 /**************************************************************************************************************************************************************
@@ -265,7 +271,8 @@ private:
  **************************************************************************************************************************************************************/
 class ListData {
 public:
-  ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager);
+  ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
+           const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor);
   ~ListData();
 
   void AdvanceToNextBlock();
@@ -523,6 +530,22 @@ public:
     return includes_positions_;
   }
 
+  const CodingPolicy& doc_id_decompressor() const {
+    return doc_id_decompressor_;
+  }
+
+  const CodingPolicy& frequency_decompressor() const {
+    return frequency_decompressor_;
+  }
+
+  const CodingPolicy& position_decompressor() const {
+    return position_decompressor_;
+  }
+
+  const CodingPolicy& block_header_decompressor() const {
+    return block_header_decompressor_;
+  }
+
   uint64_t total_cached_bytes_read() const {
     return total_cached_bytes_read_;
   }
@@ -537,7 +560,7 @@ public:
 
 private:
   Purpose purpose_;                    // Changes index reader behavior based on what we're using it for.
-  DocumentOrder document_order_;       // The way the doc ids are ordered in the index.
+  DocumentOrder document_order_;       // The way the docIDs are ordered in the index.
   const char* kLexiconSizeKey;         // The key in the configuration file used to define the lexicon size.
   const long int kLexiconSize;         // The size of the hash table for the lexicon.
   Lexicon lexicon_;                    // The lexicon data structure.
@@ -545,6 +568,12 @@ private:
   KeyValueStore meta_info_;            // The index meta information.
   bool includes_contexts_;             // True if the index contains context data.
   bool includes_positions_;            // True if the index contains position data.
+
+  // Decompressors for various portions of the index.
+  CodingPolicy doc_id_decompressor_;
+  CodingPolicy frequency_decompressor_;
+  CodingPolicy position_decompressor_;
+  CodingPolicy block_header_decompressor_;
 
   uint64_t total_cached_bytes_read_;   // Keeps track of the number of bytes read from the cache.
   uint64_t total_disk_bytes_read_;     // Keeps track of the number of bytes read from the disk.

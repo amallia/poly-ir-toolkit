@@ -34,6 +34,7 @@
 #include <cassert>
 #include <stdint.h>
 
+#include "coding_policy.h"
 #include "term_hash_table.h"
 
 class PostingCollectionController;
@@ -328,10 +329,10 @@ private:
 
   // These are properties of the index to be built. They should be set before adding any postings.
   bool ordered_documents_;  // Determines whether the docIDs are monotonically increasing.
-  bool index_positions_;  // Determines whether the position information will be collected.
-  bool index_contexts_;  // Determines whether context information will be collected.
+  bool index_positions_;    // Determines whether the position information will be collected.
+  bool index_contexts_;     // Determines whether context information will be collected.
 
-  uint32_t prev_doc_id_;  // Necessary for taking docID deltas.
+  uint32_t prev_doc_id_;    // Necessary for taking docID deltas.
   uint32_t prev_position_;  // Necessary for taking position deltas within a document.
 
   BlockList* block_list_;
@@ -432,10 +433,10 @@ private:
   MoveToFrontHashTable<TermBlock> term_block_table_;
 
   // Postings that should go into the next index are referred to as "overflow postings".
-  // We want each index to have a unique subset of the doc ids in the complete document collection (ie, no overlapping of doc ids between indices).
+  // We want each index to have a unique subset of the docIDs in the complete document collection (ie, no overlapping of docIDs between indices).
   // But it so happens that the memory pool might be full at a point when we did not finish processing all the terms from a document.
-  // Thus, to handle this problem, we have to mark a doc id beyond which this index will not have any more greater doc ids.
-  // Lastly, any doc ids that were inserted into this posting collection that are beyond the 'last_doc_id_in_index_' will not be written to the index,
+  // Thus, to handle this problem, we have to mark a doc id beyond which this index will not have any more greater docIDs.
+  // Lastly, any docIDs that were inserted into this posting collection that are beyond the 'last_doc_id_in_index_' will not be written to the index,
   // but instead inserted into the index for the next run. Yes, it's a bit messy.
   Posting* overflow_postings_;
   uint32_t first_doc_id_in_index_;
@@ -443,25 +444,29 @@ private:
   int num_overflow_postings_;
 
   uint32_t prev_doc_id_;  // Used to detect postings associated with a new (never before seen) docID.
-  int prev_doc_length_;  // Used to keep track of the lengths of documents.
+  int prev_doc_length_;   // Used to keep track of the lengths of documents.
 
   // The following members can be used together to calculate the average document length in this index.
   uint64_t total_document_lengths_;  // The sum of all document lengths in this index.
-  uint32_t total_num_docs_;  // The range of docIDs in the index.
+  uint32_t total_num_docs_;          // The range of docIDs in the index.
 
   uint32_t total_unique_num_docs_;  // The total number of unique documents in this index (where each document has at least one posting).
                                     // This can be different from 'total_num_docs_' when some documents don't contribute any postings to the index.
 
-  // The current mini index we're working on building.
-  int index_count_;
+  int index_count_;  // The current mini index we're working on building.
 
-  // For statistics purposes. Counts the number of postings in the current index we're building.
-  uint64_t posting_count_;
+  uint64_t posting_count_;  // For statistics purposes. Counts the number of postings in the current index we're building.
 
   // Properties of the index to be built.
   const bool kOrderedDocuments;  // Whether the docIDs are assigned in order.
-  const bool kIndexPositions;  // Whether positions are indexed.
-  const bool kIndexContexts;  // Whether contexts are indexed.
+  const bool kIndexPositions;    // Whether positions are indexed.
+  const bool kIndexContexts;     // Whether contexts are indexed.
+
+  // Compressors to be used for various parts of the index.
+  CodingPolicy doc_id_compressor_;
+  CodingPolicy frequency_compressor_;
+  CodingPolicy position_compressor_;
+  CodingPolicy block_header_compressor_;
 };
 
 #endif /* POSTING_COLLECTION_H_ */

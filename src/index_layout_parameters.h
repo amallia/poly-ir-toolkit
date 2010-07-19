@@ -27,15 +27,18 @@
 // Author(s): Roman Khmelichek
 //
 // TODO: Replace defines with static const ints.
+// TODO: Would be good to have a class that defines what a chunk consists of.
 //==============================================================================================================================================================
 
 #ifndef INDEX_LAYOUT_PARAMETERS_H_
 #define INDEX_LAYOUT_PARAMETERS_H_
 
+#include <stdint.h>
+
 // Maximum number of documents in a chunk.
 #define CHUNK_SIZE 128
 
-// Fixed size in bytes of a block (It's likely that the last few bytes in a block are garbage).
+// Fixed size in bytes of a block (It's likely that the last few bytes in a block are garbage, or rather they are zeroed out).
 #define BLOCK_SIZE 65536
 
 // Instead of storing the position and context for every frequency (which are sometimes in the thousands)
@@ -43,5 +46,9 @@
 // This solves the problem of having very large chunks, that are greater than the BLOCK_SIZE, which is not allowed
 // and minimizes empty space at the end of a block since chunks are small.
 #define MAX_FREQUENCY_PROPERTIES 64
+
+// The lower bound size of a single chunk in bytes (one integer per docID, frequency, and position).
+// This is because all our coding methods use at least one word per integer encoded.
+#define MIN_COMPRESSED_CHUNK_SIZE (3 * sizeof(uint32_t))
 
 #endif /* INDEX_LAYOUT_PARAMETERS_H_ */

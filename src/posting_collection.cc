@@ -62,6 +62,7 @@
 #include <string>
 #include <utility>
 
+#include "coding_policy_helper.h"
 #include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
@@ -86,7 +87,8 @@ MemoryPoolManager& GetMemoryPoolManager() {
  *
  **************************************************************************************************************************************************************/
 // Encoding / decoding for postings into memory pool blocks.
-unsigned char TermBlock::compressed_tmp_posting[11];  // TODO: Does being integer aligned have any performance benefit?
+unsigned char TermBlock::compressed_tmp_posting[11] __attribute__ ((aligned (64)));  // Aligning to a typical cache line should result in
+                                                                                     // slightly better performance.
 int TermBlock::compressed_tmp_posting_len;
 
 TermBlock::TermBlock(const char* term, int term_len) :
@@ -361,7 +363,7 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
     }
 
     // We're truncating the number of per document properties.
-    if (num_properties_decoded_per_doc < Chunk::kMaxProperties) {
+    if (num_properties_decoded_per_doc < ChunkEncoder::kMaxProperties) {
       assert(num_properties_decoded < *num_properties);
       positions[num_properties_decoded] = curr_posting.position();
       contexts[num_properties_decoded] = curr_posting.context();
@@ -638,10 +640,17 @@ PostingCollection::PostingCollection(int index_count, uint32_t starting_doc_id) 
       prev_doc_length_(0), total_document_lengths_(0), total_num_docs_(0), total_unique_num_docs_(0), index_count_(index_count), posting_count_(0),
       kOrderedDocuments(true),
       kIndexPositions((Configuration::GetConfiguration().GetValue(config_properties::kIncludePositions) == "true") ? true : false),
-      kIndexContexts((Configuration::GetConfiguration().GetValue(config_properties::kIncludeContexts) == "true") ? true : false) {
+      kIndexContexts((Configuration::GetConfiguration().GetValue(config_properties::kIncludeContexts) == "true") ? true : false),
+      doc_id_compressor_(CodingPolicy::kDocId), frequency_compressor_(CodingPolicy::kFrequency), position_compressor_(CodingPolicy::kPosition),
+      block_header_compressor_(CodingPolicy::kBlockHeader) {
   if (kHashTableSize <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kHashTableSize) + "'", true);
   }
+
+  coding_policy_helper::LoadPolicyAndCheck(doc_id_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kIndexingDocIdCoding), "docID");
+  coding_policy_helper::LoadPolicyAndCheck(frequency_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kIndexingFrequencyCoding), "frequency");
+  coding_policy_helper::LoadPolicyAndCheck(position_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kIndexingPositionCoding), "position");
+  coding_policy_helper::LoadPolicyAndCheck(block_header_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kIndexingBlockHeaderCoding), "block header");
 }
 
 PostingCollection::~PostingCollection() {
@@ -730,12 +739,23 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
   ostringstream lexicon_filename;
   lexicon_filename << "index.lex.0." << index_count_;
 
-  IndexBuilder* index_builder = new IndexBuilder(lexicon_filename.str().c_str(), index_filename.str().c_str());
+  IndexBuilder* index_builder = new IndexBuilder(lexicon_filename.str().c_str(), index_filename.str().c_str(), block_header_compressor_);
 
-  uint32_t doc_ids[Chunk::kChunkSize];
-  uint32_t frequencies[Chunk::kChunkSize];
-  uint32_t positions[Chunk::kChunkSize * Chunk::kMaxProperties];
-  unsigned char contexts[Chunk::kChunkSize * Chunk::kMaxProperties];
+  // Since the following input arrays will be used as input to the various coding policies, and the coding policy might apply a blockwise coding compressor
+  // (which would pad the array to the block size), the following rules apply:
+  // For the docID and frequency arrays, the block size is expected to be the chunk size.
+  // For the position and context arrays, the block size is expected to be a multiple of the maximum positions/contexts possible for a particular docID.
+  // Some alternative designs would be to define a fixed maximum block size and make sure the arrays are properly sized for this maximum
+  // (the position/context arrays in particular).
+  // Another alternative is to make these arrays dynamically allocated.
+  assert(doc_id_compressor_.block_size() == 0 || ChunkEncoder::kChunkSize == doc_id_compressor_.block_size());
+  assert(frequency_compressor_.block_size() == 0 || ChunkEncoder::kChunkSize == frequency_compressor_.block_size());
+  assert(position_compressor_.block_size() == 0 || (ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties) % position_compressor_.block_size() == 0);
+
+  uint32_t doc_ids[ChunkEncoder::kChunkSize];
+  uint32_t frequencies[ChunkEncoder::kChunkSize];
+  uint32_t positions[ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties];
+  unsigned char contexts[ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties];
 
   overflow_postings_ = NULL;
   int overflow_postings_offset = 0;
@@ -769,8 +789,8 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 
     do {
       // Collect all chunks of the current term.
-      num_docs = Chunk::kChunkSize;
-      num_properties = Chunk::kChunkSize * Chunk::kMaxProperties;
+      num_docs = ChunkEncoder::kChunkSize;
+      num_properties = ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties;
       num_overflow_postings = num_overflow_postings_remaining;
 
       bool have_chunk = curr_term_block->DecodePostings(doc_ids, frequencies, positions, contexts, &num_docs, &num_properties, &prev_posting,
@@ -792,12 +812,12 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 
       if (have_chunk && num_docs > 0) {
         assert(num_properties > 0);
-        Chunk* chunk = new Chunk(doc_ids, frequencies, (kIndexPositions ? positions : NULL), (kIndexContexts ? contexts : NULL), num_docs, num_properties,
-                                 prev_chunk_last_doc_id);
-        prev_chunk_last_doc_id = chunk->last_doc_id();
-        index_builder->Add(*chunk, curr_term_block->term(), curr_term_block->term_len());
+        ChunkEncoder chunk(doc_ids, frequencies, (kIndexPositions ? positions : NULL), (kIndexContexts ? contexts : NULL), num_docs, num_properties,
+                                 prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
+        prev_chunk_last_doc_id = chunk.last_doc_id();
+        index_builder->Add(chunk, curr_term_block->term(), curr_term_block->term_len());
       }
-    } while (num_docs == Chunk::kChunkSize);
+    } while (num_docs == ChunkEncoder::kChunkSize);
 
     // Restore block list.
     curr_term_block->set_block_list(start_of_list);
@@ -827,6 +847,22 @@ void PostingCollection::WriteMetaFile(IndexBuilder* index_builder) {
 
   metafile_values << kIndexContexts;
   index_metafile.AddKeyValuePair(meta_properties::kIncludesContexts, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kIndexingDocIdCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexDocIdCoding, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kIndexingFrequencyCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexFrequencyCoding, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kIndexingPositionCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexPositionCoding, metafile_values.str());
+  metafile_values.str("");
+
+  metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kIndexingBlockHeaderCoding);
+  index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding, metafile_values.str());
   metafile_values.str("");
 
   metafile_values << total_document_lengths_;

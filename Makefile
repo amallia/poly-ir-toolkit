@@ -5,6 +5,8 @@ CXXFLAGS =	-O3 -g -Wall
 			#-Winline : warns about functions declared inline but were not actually inlined.
 
 OBJS =		src/cache_manager.o \
+			src/coding_policy.o \
+			src/coding_policy_helper.o \
 			src/configuration.o \
 			src/document_collection.o \
 			src/document_map.o \

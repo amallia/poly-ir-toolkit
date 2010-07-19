@@ -27,7 +27,7 @@
 // Author(s): Roman Khmelichek
 //
 // TODO: Compress the integer entries in lexicon and front code the terms. Should do this in some sort of block size.
-// TODO: Can compress contexts with stuff like pfor delta, since they're all really small ints, but try to do magic bytes with contexts for testing this
+// TODO: Can compress contexts with stuff like PForDelta, since they're all really small integers, but try to do magic bytes with contexts for testing this
 //       feature.
 //==============================================================================================================================================================
 
@@ -46,12 +46,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "compression_toolkit/pfor_coding.h"
-#include "compression_toolkit/rice_coding.h"
-#include "compression_toolkit/rice_coding2.h"
-#include "compression_toolkit/s9_coding.h"
-#include "compression_toolkit/s16_coding.h"
-#include "compression_toolkit/vbyte_coding.h"
+#include "config_file_properties.h"
 #include "globals.h"
 #include "index_layout_parameters.h"
 #include "logger.h"
@@ -80,122 +75,80 @@ InvertedListMetaData::~InvertedListMetaData() {
 }
 
 /**************************************************************************************************************************************************************
- * Chunk
+ * ChunkEncoder
  *
  **************************************************************************************************************************************************************/
-const int Chunk::kChunkSize;  // Initialized in the class definition.
-const int Chunk::kMaxProperties;  // Initialized in the class definition.
+const int ChunkEncoder::kChunkSize;      // Initialized in the class definition.
+const int ChunkEncoder::kMaxProperties;  // Initialized in the class definition.
 
-Chunk::Chunk(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int num_docs, int num_properties,
-             uint32_t prev_chunk_last_doc_id) :
+ChunkEncoder::ChunkEncoder(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int num_docs, int num_properties,
+                       uint32_t prev_chunk_last_doc_id, const CodingPolicy& doc_id_compressor, const CodingPolicy& frequency_compressor,
+                       const CodingPolicy& position_compressor) :
   num_docs_(num_docs), num_properties_(num_properties), size_(0), first_doc_id_(prev_chunk_last_doc_id), last_doc_id_(first_doc_id_),
-      compressed_doc_ids_(NULL), compressed_doc_ids_len_(0), compressed_frequencies_(NULL), compressed_frequencies_len_(0), compressed_positions_(NULL),
-      compressed_positions_len_(0), compressed_contexts_(NULL), compressed_contexts_len_(0) {
+      compressed_doc_ids_len_(0), compressed_frequencies_len_(0), compressed_positions_len_(0) {
   for (int i = 0; i < num_docs; ++i) {
-    last_doc_id_ += doc_ids[i];  // The docIDs are d-gap coded. We need to decode them (and add them to the last docID from the previous chunk) to find the last docID in this chunk.
+    // The docIDs are d-gap coded. We need to decode them (and add them to the last docID from the previous chunk) to find the last docID in this chunk.
+    last_doc_id_ += doc_ids[i];
   }
 
-  //TODO: Here we have to pick the right compress functions to call, or do it by inheritance.
-  CompressDocIds(doc_ids, num_docs);
-  CompressFrequencies(frequencies, num_docs);
+  CompressDocIds(doc_ids, num_docs, doc_id_compressor);
+  CompressFrequencies(frequencies, num_docs, frequency_compressor);
   if (positions != NULL)
-    CompressPositions(positions, num_properties_);
+    CompressPositions(positions, num_properties_, position_compressor);
 
-  // Calculate total compressed size of this chunk in bytes.
-  size_ = compressed_doc_ids_len_ * sizeof(*compressed_doc_ids_) + compressed_frequencies_len_ * sizeof(*compressed_frequencies_) + compressed_positions_len_
-      * sizeof(*compressed_positions_) + compressed_contexts_len_ * sizeof(*compressed_contexts_);
+  // Calculate total compressed size of this chunk in words.
+  size_ = compressed_doc_ids_len_ + compressed_frequencies_len_ + compressed_positions_len_;
 }
 
-Chunk::~Chunk() {
-  delete[] compressed_doc_ids_;
-  delete[] compressed_frequencies_;
-  delete[] compressed_positions_;
-  delete[] compressed_contexts_;
-}
-
-void Chunk::CompressDocIds(uint32_t* doc_ids, int doc_ids_len) {
+void ChunkEncoder::CompressDocIds(uint32_t* doc_ids, int doc_ids_len, const CodingPolicy& doc_id_compressor) {
   assert(doc_ids != NULL && doc_ids_len > 0);
+  assert(doc_ids_len <= ChunkEncoder::kChunkSize);
 
-//  compressed_doc_ids_ = new uint32_t[doc_ids_len];
-//  s16_coding compressor;
-//  compressed_doc_ids_len_ = compressor.Compression(doc_ids, compressed_doc_ids_, doc_ids_len);
+  if (doc_id_compressor.primary_coder_is_blockwise())
+    assert(doc_id_compressor.block_size() == kChunkSize);
 
-  ///////////////////////////////////////////////////////////////////////////////////////////////
-  // PForDelta coding with total padding, results in bad compression.
-  // Assumption that 'doc_ids []' is of size 'kChunkSize'.
-  for (int i = doc_ids_len; i < kChunkSize; ++i) {
-    doc_ids[i] = 0;
-  }
-  compressed_doc_ids_ = new uint32_t[kChunkSize + 1];  // +1 for PForDelta metainfo.
-  pfor_coding compressor;
-  compressor.set_size(kChunkSize);
-  compressed_doc_ids_len_ = compressor.Compression(doc_ids, compressed_doc_ids_, kChunkSize);
-  ///////////////////////////////////////////////////////////////////////////////////////////////////
+  compressed_doc_ids_len_ = doc_id_compressor.Compress(doc_ids, compressed_doc_ids_, doc_ids_len);
 }
 
-void Chunk::CompressFrequencies(uint32_t* frequencies, int frequencies_len) {
+void ChunkEncoder::CompressFrequencies(uint32_t* frequencies, int frequencies_len, const CodingPolicy& frequency_compressor) {
   assert(frequencies != NULL && frequencies_len > 0);
+  assert(frequencies_len <= ChunkEncoder::kChunkSize);
 
-  compressed_frequencies_ = new uint32_t[frequencies_len];
-  s9_coding compressor;
-  compressed_frequencies_len_ = compressor.Compression(frequencies, compressed_frequencies_, frequencies_len);
+  if (frequency_compressor.primary_coder_is_blockwise())
+    assert(frequency_compressor.block_size() == kChunkSize);
+
+  compressed_frequencies_len_ = frequency_compressor.Compress(frequencies, compressed_frequencies_, frequencies_len);
 }
 
-void Chunk::CompressPositions(uint32_t* positions, int positions_len) {
+void ChunkEncoder::CompressPositions(uint32_t* positions, int positions_len, const CodingPolicy& position_compressor) {
   assert(positions != NULL && positions_len > 0);
+  assert(positions_len <= ChunkEncoder::kChunkSize * ChunkEncoder::kMaxProperties);
 
-  pfor_coding compressor;
-  compressor.set_size(kChunkSize);
+  if (position_compressor.primary_coder_is_blockwise())
+    assert(position_compressor.block_size() >= kChunkSize);
 
-  int num_whole_chunklets = positions_len / kChunkSize;
-  compressed_positions_ = new uint32_t[(num_whole_chunklets + 1) * (kChunkSize + 1)];  // +1 for PForDelta metainfo.
-
-  int compressed_positions_offset = 0;
-  int uncompressed_positions_offset = 0;
-  while (num_whole_chunklets-- > 0) {
-    compressed_positions_len_ += compressor.Compression(positions + uncompressed_positions_offset, compressed_positions_ + compressed_positions_offset, kChunkSize);
-    compressed_positions_offset = compressed_positions_len_;
-    uncompressed_positions_offset += kChunkSize;
-  }
-
-  //TODO: Make sure parameter matches in encoding code (make global setting).
-  const int kPadUnless = 100;  // Pad unless we have < kPadUntil documents left to code into a block.
-
-  int positions_left = positions_len % kChunkSize;
-  if (positions_left == 0) {
-    // Nothing to do here.
-  } else if (positions_left < kPadUnless) {
-    // Encode leftover portion with a non-blockwise compressor.
-    s16_coding leftover_compressor;
-    compressed_positions_len_ += leftover_compressor.Compression(positions + uncompressed_positions_offset,
-                                                                 compressed_positions_ + compressed_positions_offset, positions_left);
-  } else {
-    // Encode leftover portion with a blockwise compressor, and pad it to the blocksize.
-    // Assumption that 'positions []' is of size ('kChunkSize * kMaxProperties').
-    int pad_until = kChunkSize * ((positions_len / kChunkSize) + 1);
-    for (int i = positions_len; i < pad_until; ++i) {
-      positions[i] = 0;
-    }
-    compressed_positions_len_ += compressor.Compression(positions + uncompressed_positions_offset, compressed_positions_ + compressed_positions_offset, kChunkSize);
-  }
+  compressed_positions_len_ = position_compressor.Compress(positions, compressed_positions_, positions_len);
 }
 
 /**************************************************************************************************************************************************************
- * Block
+ * BlockEncoder
  *
  **************************************************************************************************************************************************************/
-const int Block::kBlockSize;  // Initialized in the class definition.
+const int BlockEncoder::kBlockSize;                            // Initialized in the class definition.
+const int BlockEncoder::kChunkSizeLowerBound;                  // Initialized in the class definition.
+const int BlockEncoder::kChunkPropertiesUpperbound;            // Initialized in the class definition.
+const int BlockEncoder::kChunkPropertiesCompressedUpperbound;  // Initialized in the class definition.
 
-Block::Block() :
-  block_data_size_(0), chunk_properties_compressed_(NULL), chunk_properties_compressed_len_(0), num_block_header_bytes_(0), num_doc_ids_bytes_(0),
-      num_frequency_bytes_(0), num_positions_bytes_(0), num_wasted_space_bytes_(0) {
+BlockEncoder::BlockEncoder(const CodingPolicy& block_header_compressor) :
+  block_header_compressor_(block_header_compressor), num_chunks_(0), block_data_offset_(0),
+      chunk_properties_uncompressed_size_(UncompressedInBufferUpperbound(kChunkPropertiesUpperbound, block_header_compressor_.block_size())),
+      chunk_properties_uncompressed_(new uint32_t[chunk_properties_uncompressed_size_]), chunk_properties_uncompressed_offset_(0),
+      chunk_properties_compressed_len_(0), num_block_header_bytes_(0), num_doc_ids_bytes_(0), num_frequency_bytes_(0), num_positions_bytes_(0),
+      num_wasted_space_bytes_(0) {
 }
 
-Block::~Block() {
-  delete[] chunk_properties_compressed_;
-  for (size_t i = 0; i < chunks_.size(); ++i) {
-    delete chunks_[i];
-  }
+BlockEncoder::~BlockEncoder() {
+  delete[] chunk_properties_uncompressed_;
 }
 
 // Returns true when 'chunk' fits into this block, false otherwise.
@@ -203,84 +156,128 @@ Block::~Block() {
 // If the upper bound indicates it might not fit, we have to compress the header info with 'chunk' included as well,
 // in order to see if it actually fits. The upper bound is done as an optimization, so we don't have to compress the block header
 // when adding each additional chunk, but only the last few chunks.
-// TODO: Make an assert for when a single chunk cannot fit into a block and output a message that 'Chunk::kMaxProperties'
-//       needs to be decreased because it's causing a single chunk to not fit into a block of 'BLOCK_SIZE' bytes (or alternatively increase the block size).
-bool Block::AddChunk(const Chunk& chunk) {
-  uint32_t num_chunks = chunks_.size() + 1;
+bool BlockEncoder::AddChunk(const ChunkEncoder& chunk) {
+  uint32_t num_chunks = num_chunks_ + 1;
+
+  // Store the next pair of (last doc_id, chunk size).
+  int chunk_last_doc_id_idx = 2 * num_chunks - 2;
+  int chunk_size_idx = 2 * num_chunks - 1;
+  assert(chunk_last_doc_id_idx < chunk_properties_uncompressed_size_);
+  assert(chunk_size_idx < chunk_properties_uncompressed_size_);
+  chunk_properties_uncompressed_[chunk_last_doc_id_idx] = chunk.last_doc_id();
+  chunk_properties_uncompressed_[chunk_size_idx] = chunk.size();
+
+  const int kNumHeaderInts = 2 * num_chunks;
 
   int num_chunks_size = sizeof(num_chunks);
-  //TODO: 'curr_block_header_size' changes with PForDelta, because of padding and it uses an additional byte for meta info.
-  //TODO: Also would need to change upper bound size of compressed array.
-  //TODO: Can improve upper bound by considering the last 'chunk_properties_compressed_len_' and
-  //      adding the additional # of chunk properties needed to compress in full 4 byte int representation.
-  int curr_block_header_size = num_chunks_size + (2 * num_chunks * sizeof(uint32_t));  // Upper bound with 'chunk' included.
-  int curr_block_data_size = block_data_size_ + chunk.size();
+  int curr_block_header_size = num_chunks_size + CompressedOutBufferUpperbound((kNumHeaderInts * sizeof(uint32_t)));  // Upper bound with 'chunk' included.
+  int curr_block_data_size = (block_data_offset_ + chunk.size()) * sizeof(uint32_t);
   int upper_bound_block_size = curr_block_data_size + curr_block_header_size;
+
   if (upper_bound_block_size > kBlockSize) {
-    uint32_t* curr_chunk_properties_compressed = new uint32_t[2 * num_chunks];  // Upper bound on space for compressed last doc_ids and chunk sizes.
-    uint32_t* chunk_properties_uncompressed = new uint32_t[2 * num_chunks];  // Store all pairs of (last doc_id, chunk size).
+    int curr_chunk_properties_compressed_len = CompressHeader(chunk_properties_uncompressed_, chunk_properties_compressed_, kNumHeaderInts);
 
-    for (size_t i = 0, j = 0; i < chunks_.size(); ++i, j += 2) {
-      chunk_properties_uncompressed[j] = ConvertChunkLastDocId(chunks_[i]->last_doc_id());
-      chunk_properties_uncompressed[j + 1] = ConvertChunkSize(chunks_[i]->size());
-    }
-    chunk_properties_uncompressed[2 * num_chunks - 2] = ConvertChunkLastDocId(chunk.last_doc_id());
-    chunk_properties_uncompressed[2 * num_chunks - 1] = ConvertChunkSize(chunk.size());
-
-    int curr_chunk_properties_compressed_len = CompressHeader(chunk_properties_uncompressed, curr_chunk_properties_compressed, 2 * num_chunks);
-
-    delete[] chunk_properties_uncompressed;
-
-    if ((curr_block_data_size + num_chunks_size + curr_chunk_properties_compressed_len * static_cast<int>(sizeof(*curr_chunk_properties_compressed))) <= kBlockSize) {
-      delete[] chunk_properties_compressed_;
-      chunk_properties_compressed_ = curr_chunk_properties_compressed;
+    if ((curr_block_data_size + num_chunks_size + (curr_chunk_properties_compressed_len * static_cast<int> (sizeof(*chunk_properties_compressed_)))) <= kBlockSize) {
       chunk_properties_compressed_len_ = curr_chunk_properties_compressed_len;
     } else {
-      delete [] curr_chunk_properties_compressed;
+      // TODO: Test this condition.
+      // When a single chunk cannot fit into a block we have a problem.
+      if (num_chunks == 1) {
+        GetErrorLogger().Log(string("A single chunk cannot fit into a block. There are two possible solutions.\n")
+            + string("1) Decrease the maximum number of properties per document.\n") + string("2) Increase the block size."), true);
+      }
+
+      // Need to recompress the header (without the new chunk properties, since it doesn't fit).
+      chunk_properties_compressed_len_ = CompressHeader(chunk_properties_uncompressed_, chunk_properties_compressed_, num_chunks_ * 2);
       return false;
     }
   }
 
-  chunks_.push_back(&chunk);
-  block_data_size_ += chunk.size();
+  // Chunk fits into this block, so copy chunk data to this block.
+  CopyChunkData(chunk);
+  ++num_chunks_;
   return true;
 }
 
-void Block::Finalize() {
-  delete[] chunk_properties_compressed_;
-  chunk_properties_compressed_ = new uint32_t[2 * chunks_.size()];  // Upper bound on space for compressed last doc_ids and chunk sizes.
-  uint32_t* chunk_properties_uncompressed = new uint32_t[2 * chunks_.size()];  // Store all pairs of (last doc_id, chunk size).
+void BlockEncoder::CopyChunkData(const ChunkEncoder& chunk) {
+  const int kWordSize = sizeof(uint32_t);
+  const int kBlockSizeWords = kBlockSize / kWordSize;
+  assert(block_data_offset_ + chunk.size() <= kBlockSizeWords);
 
-  for (size_t i = 0, j = 0; i < chunks_.size(); ++i, j += 2) {
-    chunk_properties_uncompressed[j] = ConvertChunkLastDocId(chunks_[i]->last_doc_id());
-    chunk_properties_uncompressed[j + 1] = ConvertChunkSize(chunks_[i]->size());
+  int num_bytes;
+  int num_words;
+
+  // DocIDs.
+  const uint32_t* doc_ids = chunk.compressed_doc_ids();
+  int doc_ids_len = chunk.compressed_doc_ids_len();
+  num_bytes = doc_ids_len * sizeof(*doc_ids);
+  assert(num_bytes % kWordSize == 0);
+  num_words = num_bytes / kWordSize;
+  assert(block_data_offset_ + num_words <= kBlockSizeWords);
+  if (doc_ids_len != 0) {
+    memcpy(block_data_ + block_data_offset_, doc_ids, num_bytes);
+    block_data_offset_ += num_words;
+    num_doc_ids_bytes_ += num_bytes;
+  } else {
+    assert(false);  // DocIDs should always be present.
   }
-  chunk_properties_compressed_len_ = CompressHeader(chunk_properties_uncompressed, chunk_properties_compressed_, 2 * chunks_.size());
-  delete[] chunk_properties_uncompressed;
+
+  // Frequencies.
+  const uint32_t* frequencies = chunk.compressed_frequencies();
+  int frequencies_len = chunk.compressed_frequencies_len();
+  num_bytes = frequencies_len * sizeof(*frequencies);
+  assert(num_bytes % kWordSize == 0);
+  num_words = num_bytes / kWordSize;
+  assert(block_data_offset_ + num_words <= kBlockSizeWords);
+  if (frequencies_len != 0) {
+    memcpy(block_data_ + block_data_offset_, frequencies, num_bytes);
+    block_data_offset_ += num_words;
+    num_frequency_bytes_ += num_bytes;
+  } else {
+    assert(false);  // Frequencies should always be present.
+  }
+
+  // Positions.
+  const uint32_t* positions = chunk.compressed_positions();
+  int positions_len = chunk.compressed_positions_len();
+  num_bytes = positions_len * sizeof(*positions);
+  assert(num_bytes % kWordSize == 0);
+  num_words = num_bytes / kWordSize;
+  assert(block_data_offset_ + num_words <= kBlockSizeWords);
+  if (positions_len != 0) {
+    memcpy(block_data_ + block_data_offset_, positions, num_bytes);
+    block_data_offset_ += num_words;
+    num_positions_bytes_ += num_bytes;
+  } else {
+    // If we don't have positions, then we're building an index without them.
+  }
 }
 
-// TODO: Allow to choose type of coder and padding policy (need to make sure 'in' is big enough to be padded until the chosen block size).
-int Block::CompressHeader(uint32_t* in, uint32_t* out, int n) {
-  s16_coding compressor;
-  return compressor.Compression(in, out, n);
+void BlockEncoder::Finalize() {
+  const int kNumHeaderInts = 2 * num_chunks_;
+  chunk_properties_compressed_len_ = CompressHeader(chunk_properties_uncompressed_, chunk_properties_compressed_, kNumHeaderInts);
+}
+
+// The 'header' array size needs to be a multiple of the block size used by the block header compressor.
+int BlockEncoder::CompressHeader(uint32_t* header, uint32_t* output, int header_len) {
+  return block_header_compressor_.Compress(header, output, header_len);
 }
 
 // 'block_bytes_len' must be block sized.
-void Block::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len) {
-  if (chunk_properties_compressed_ == NULL) {
+void BlockEncoder::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len) {
+  if (chunk_properties_compressed_len_ == 0) {
     Finalize();
   }
-  assert(chunk_properties_compressed_ != NULL && chunk_properties_compressed_len_ > 0);
+  assert(chunk_properties_compressed_len_ > 0);
   assert(block_bytes_len == kBlockSize);
 
   int block_bytes_offset = 0;
   int num_bytes;
 
   // Number of chunks.
-  uint32_t num_chunks = chunks_.size();
-  num_bytes = sizeof(num_chunks);
+  num_bytes = sizeof(num_chunks_);
   assert(block_bytes_offset + num_bytes <= block_bytes_len);
-  memcpy(block_bytes + block_bytes_offset, &num_chunks, num_bytes);
+  memcpy(block_bytes + block_bytes_offset, &num_chunks_, num_bytes);
   block_bytes_offset += num_bytes;
   num_block_header_bytes_ += num_bytes;
 
@@ -291,49 +288,11 @@ void Block::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len) {
   block_bytes_offset += num_bytes;
   num_block_header_bytes_ += num_bytes;
 
-  for (size_t i = 0; i < chunks_.size(); ++i) {
-    // DocIDs.
-    const uint32_t* doc_ids = chunks_[i]->compressed_doc_ids();
-    int doc_ids_len = chunks_[i]->compressed_doc_ids_len();
-    num_bytes = doc_ids_len * sizeof(*doc_ids);
-    assert(block_bytes_offset + num_bytes <= block_bytes_len);
-    if (doc_ids != NULL && doc_ids_len != 0) {
-      memcpy(block_bytes + block_bytes_offset, doc_ids, num_bytes);
-      block_bytes_offset += num_bytes;
-      num_doc_ids_bytes_ += num_bytes;
-    } else {
-      assert(doc_ids == NULL && doc_ids_len == 0);  // If either one is NULL / 0, both are expected to be NULL / 0.
-      assert(false);  // DocIDs should always be present.
-    }
-
-    // Frequencies.
-    const uint32_t* frequencies = chunks_[i]->compressed_frequencies();
-    int frequencies_len = chunks_[i]->compressed_frequencies_len();
-    num_bytes = frequencies_len * sizeof(*frequencies);
-    assert(block_bytes_offset + num_bytes <= block_bytes_len);
-    if (frequencies != NULL && frequencies_len != 0) {
-      memcpy(block_bytes + block_bytes_offset, frequencies, num_bytes);
-      block_bytes_offset += num_bytes;
-      num_frequency_bytes_ += num_bytes;
-    } else {
-      assert(frequencies == NULL && frequencies_len == 0);  // If either one is NULL / 0, both are expected to be NULL / 0.
-      assert(false);  // Frequencies should always be present.
-    }
-
-    // Positions.
-    const uint32_t* positions = chunks_[i]->compressed_positions();
-    int positions_len = chunks_[i]->compressed_positions_len();
-    num_bytes = positions_len * sizeof(*positions);
-    assert(block_bytes_offset + num_bytes <= block_bytes_len);
-    if (positions != NULL && positions_len != 0) {
-      memcpy(block_bytes + block_bytes_offset, positions, num_bytes);
-      block_bytes_offset += num_bytes;
-      num_positions_bytes_ += num_bytes;
-    } else {
-      assert(positions == NULL && positions_len == 0);  // If either one is NULL / 0, both are expected to be NULL / 0.
-      // If we don't have positions, then possibly we're building an index without them.
-    }
-  }
+  // Compressed chunk data.
+  num_bytes = block_data_offset_ * sizeof(*block_data_);
+  assert(block_bytes_offset + num_bytes <= block_bytes_len);
+  memcpy(block_bytes + block_bytes_offset, block_data_, num_bytes);
+  block_bytes_offset += num_bytes;
 
   // Fill remaining wasted space with 0s.
   num_bytes = block_bytes_len - block_bytes_offset;
@@ -344,14 +303,17 @@ void Block::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len) {
 /**************************************************************************************************************************************************************
  * IndexBuilder
  *
+ * TODO: Don't need to create new BlockEncoders every time. Just allocate array of BlockEncoders that you can then reset.
  **************************************************************************************************************************************************************/
-IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filename) :
-  kBlocksBufferSize(64), blocks_buffer_(new Block*[kBlocksBufferSize]), blocks_buffer_offset_(0), curr_block_(new Block()), curr_block_number_(0),
-      curr_chunk_number_(0), kIndexFilename(index_filename),
+IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filename, const CodingPolicy& block_header_compressor) :
+  kBlocksBufferSize(64), blocks_buffer_(new BlockEncoder*[kBlocksBufferSize]), blocks_buffer_offset_(0), curr_block_(new BlockEncoder(block_header_compressor)),
+      curr_block_number_(0), curr_chunk_number_(0), kIndexFilename(index_filename),
       index_fd_(open(kIndexFilename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)), kLexiconBufferSize(65536),
-      lexicon_(new InvertedListMetaData*[kLexiconBufferSize]), lexicon_offset_(0), lexicon_fd_(open(lexicon_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR
-          | S_IWUSR | S_IRGRP | S_IROTH)), num_unique_terms_(0), posting_count_(0), total_num_block_header_bytes_(0), total_num_doc_ids_bytes_(0),
-      total_num_frequency_bytes_(0), total_num_positions_bytes_(0), total_num_wasted_space_bytes_(0) {
+      lexicon_(new InvertedListMetaData*[kLexiconBufferSize]), lexicon_offset_(0),
+      lexicon_fd_(open(lexicon_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
+      block_header_compressor_(block_header_compressor), num_unique_terms_(0), posting_count_(0),
+      total_num_block_header_bytes_(0), total_num_doc_ids_bytes_(0), total_num_frequency_bytes_(0), total_num_positions_bytes_(0),
+      total_num_wasted_space_bytes_(0) {
   if (index_fd_ < 0) {
     GetErrorLogger().LogErrno("open() in IndexBuilder::IndexBuilder(), trying to open index for writing", errno, true);
   }
@@ -373,7 +335,7 @@ IndexBuilder::~IndexBuilder() {
   assert(ret != -1);
 }
 
-void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
+void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len) {
   assert(term != NULL && term_len > 0);
 
   // Update index statistics.
@@ -385,7 +347,7 @@ void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
     curr_chunk_number_ = 0;
 
     blocks_buffer_[blocks_buffer_offset_++] = curr_block_;
-    curr_block_ = new Block();
+    curr_block_ = new BlockEncoder(block_header_compressor_);
     bool added_chunk = curr_block_->AddChunk(chunk);
     if (!added_chunk)
       assert(false);
@@ -415,11 +377,11 @@ void IndexBuilder::Add(const Chunk& chunk, const char* term, int term_len) {
 }
 
 void IndexBuilder::WriteBlocks() {
-  unsigned char block_bytes[Block::kBlockSize];
+  unsigned char block_bytes[BlockEncoder::kBlockSize];
 
   for (int i = 0; i < blocks_buffer_offset_; ++i) {
     if (blocks_buffer_[i]->num_chunks() > 0) {
-      blocks_buffer_[i]->GetBlockBytes(block_bytes, Block::kBlockSize);
+      blocks_buffer_[i]->GetBlockBytes(block_bytes, BlockEncoder::kBlockSize);
 
       // Update statistics on byte breakdown of index.
       total_num_block_header_bytes_ += blocks_buffer_[i]->num_block_header_bytes();
@@ -428,7 +390,7 @@ void IndexBuilder::WriteBlocks() {
       total_num_positions_bytes_ += blocks_buffer_[i]->num_positions_bytes();
       total_num_wasted_space_bytes_ += blocks_buffer_[i]->num_wasted_space_bytes();
 
-      int write_ret = write(index_fd_, block_bytes, Block::kBlockSize);
+      int write_ret = write(index_fd_, block_bytes, BlockEncoder::kBlockSize);
       if (write_ret < 0) {
         GetErrorLogger().LogErrno("write() in IndexBuilder::WriteBlocks()", errno, true);
       }

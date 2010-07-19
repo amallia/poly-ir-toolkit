@@ -28,5 +28,20 @@
 //
 //==============================================================================================================================================================
 
-#include "compression_policy.h"
+#include "coding_policy_helper.h"
+
+#include "globals.h"
+#include "logger.h"
 using namespace std;
+
+namespace coding_policy_helper {
+
+void LoadPolicyAndCheck(CodingPolicy& coding_policy, const string& policy_str, const string& which_coder) {
+  CodingPolicy::Status coding_policy_status = coding_policy.LoadPolicy(policy_str);
+  if (coding_policy_status.status_code() != CodingPolicy::Status::kOk) {
+    GetErrorLogger().Log("Coding policy error for " + which_coder + " coder with policy '" + policy_str + "': "
+        + string(coding_policy_status.GetStatusMessage()), true);
+  }
+}
+
+} // namespace coding_policy_helper

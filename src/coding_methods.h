@@ -26,43 +26,23 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// TODO: Ideas:
-// For the methods that require padding until blocksize elements:
-// Need to choose initial compression alg (that requires padding) + another compression alg for the special case where we don't pad.
-//
-//
-//
+// Defines the available coding methods and the names by which they are to be specified.
 //==============================================================================================================================================================
 
-#ifndef COMPRESSION_POLICY_H_
-#define COMPRESSION_POLICY_H_
+#ifndef CODING_METHODS_H_
+#define CODING_METHODS_H_
 
-#include "index_layout_parameters.h"
+namespace coding_methods {
 
-// NOTES:
-// GetCompressionPolicy
-// let it parse the expression (or just have method for parsing and another to just enter params)
-// it will init the proper policy --> use the base coding class for the compressor and leftover compressor...
+// Defines names for each coding method.
+static const char kRiceCoding[] = "rice";
+static const char kTurboRiceCoding[] = "turbo-rice";
+static const char kPForDeltaCoding[] = "pfor";
+static const char kS9Coding[] = "s9";
+static const char kS16Coding[] = "s16";
+static const char kVarByteCoding[] = "vbyte";
+static const char kNullCoding[] = "null";
 
-// ENCODING::
-// pass pointer to compressed data and decompressed space (assert there is enough space) ---> also have a function that will return the amount of decompressed space needed
+} // namespace coding_methods
 
-// DECODING::
-//
-
-// Defines chunk-wise compression policies.
-class CompressionPolicy {
-public:
-  CompressionPolicy* GetCompressionPolicy(bool compression, int policy);
-
-};
-
-class PForCompressionPolicy : CompressionPolicy {
-
-};
-
-class S16CompressionPolicy : CompressionPolicy {
-
-};
-
-#endif /* COMPRESSION_POLICY_H_ */
+#endif /* CODING_METHODS_H_ */

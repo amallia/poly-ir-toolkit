@@ -44,7 +44,8 @@
 // Important note: For S9 and S16, in this implementation, the output array provided for decompression should be an upper bound of a multiple of at least 28,
 // of the total number of integers expected to be decompressed; this is because the last compressed word could be coded such that it has 28 integers, but not
 // all of them are actually valid integers (there could be less than 28), so the output array buffer will still be accessed and those invalid integers decoded,
-// so the output array could be accessed at most 28 integers ahead of the total number of integers expected to be decompressed.
+// so the output array could be accessed at most 28 integers ahead of the total number of integers expected to be decompressed. Otherwise, a segmentation fault
+// or memory corruption could result.
 //
 // Variable Byte Coding:
 // This implementation uses a maximum of 5 bytes to encode a single integer. It therefore has a limitation on the maximum integer that can be encoded, which is
@@ -63,13 +64,11 @@
 #include <ctime>
 #include <stdint.h>
 
-#include <algorithm>
-#include <utility>
-#include <iostream>
-
 #include <strings.h>
 #include <sys/time.h>
 
+#include "coding_methods.h"
+#include "coding_policy_helper.h"
 #include "compression_toolkit/pfor_coding.h"
 #include "compression_toolkit/rice_coding.h"
 #include "compression_toolkit/rice_coding2.h"
@@ -99,7 +98,7 @@ bool CodingBench(coding* coder, unsigned* compressor_in, int block_size, int num
                  double* time_elapsed_seconds) {
   coder->set_size(block_size);
 
-  int max_compressed_size = 2 * block_size;  // Per block.
+  int max_compressed_size = CompressedOutBufferUpperbound(block_size);  // Per block.
   unsigned* compressor_out = new unsigned[max_compressed_size * num_blocks];
 
   unsigned curr_compressed_offset = 0;
@@ -111,10 +110,7 @@ bool CodingBench(coding* coder, unsigned* compressor_in, int block_size, int num
     curr_decompressed_offset += block_size;
   }
 
-  // The '+ 1' in '(num_blocks + 1)' is necessary for S9/S16, which might decode 28 integers in the last compressed word
-  // (but that compressed word actually corresponds to less than 28 integers), which could result in a seg fault if we don't allocate
-  // a little (at least 28 words) extra space to the decompressed array.
-  unsigned* decompressor_out = new unsigned[block_size * (num_blocks + 1)];
+  unsigned* decompressor_out = new unsigned[UncompressedOutBufferUpperbound(block_size * num_blocks)];
 
   *compressed_words = total_compressed_words;
 
@@ -164,7 +160,6 @@ void PrintStats(const char* coder_str, double time_elapsed_seconds, double compr
   printf("%s: %f average compression ratio (lower is better).\n", coder_str, (compressed_words / num_integers));
 }
 
-// TODO: Would be interesting to time compression and see how many million integers per second we can compress under each type of coder.
 void TestCompression() {
   printf("Testing compression / decompression codes...This might take a while...\n");
 
@@ -200,7 +195,7 @@ void TestCompression() {
     for (int block_size = 32; block_size <= kMaxBlockSize; block_size *= 2) {
       for (int num_blocks = 1; num_blocks <= kMaxNumBlocks; ++num_blocks) {
         unsigned* compressor_in = new unsigned[block_size * num_blocks];
-        cout << "random_num_range: " << random_num_range << endl;
+        printf("random_num_range: %d\n", random_num_range);
         for (int i = 0; i < (block_size * num_blocks); ++i) {
           compressor_in[i] = rand() % random_num_range;
         }
@@ -359,7 +354,7 @@ void TestCoding(coding* coder) {
 //                            17, 17, 17, 17,
 //                            17, 17, 17, 17};
 
-  unsigned int out[2 * kSize];
+  unsigned int out[CompressedOutBufferUpperbound(kSize)];
   printf("Compressing the following array (read left to right):\n");
   for (int i = 0; i < kSize; i += 4) {
     printf("%10u, %10u, %10u, %10u", in[i], in[i + 1], in[i + 2], in[i + 3]);
@@ -387,28 +382,44 @@ void TestCoding(coding* coder) {
 }
 
 void TestCoder(char* coder_type) {
-  if (strcasecmp(coder_type, "rice") == 0) {
+  if (strcasecmp(coder_type, coding_methods::kRiceCoding) == 0) {
     rice_coding rice_coder;
     TestCoding(&rice_coder);
-  } else if (strcasecmp(coder_type, "turbo-rice") == 0) {
+  } else if (strcasecmp(coder_type, coding_methods::kTurboRiceCoding) == 0) {
     rice_coding2 turbo_rice_coder;
     TestCoding(&turbo_rice_coder);
-  } else if (strcasecmp(coder_type, "pfor") == 0) {
+  } else if (strcasecmp(coder_type, coding_methods::kPForDeltaCoding) == 0) {
     pfor_coding pfor_coder;
     TestCoding(&pfor_coder);
-  } else if (strcasecmp(coder_type, "s9") == 0) {
+  } else if (strcasecmp(coder_type, coding_methods::kS9Coding) == 0) {
     s9_coding s9_coder;
     TestCoding(&s9_coder);
-  } else if (strcasecmp(coder_type, "s16") == 0) {
+  } else if (strcasecmp(coder_type, coding_methods::kS16Coding) == 0) {
     s16_coding s16_coder;
     TestCoding(&s16_coder);
-  } else if (strcasecmp(coder_type, "vbyte") == 0) {
+  } else if (strcasecmp(coder_type, coding_methods::kVarByteCoding) == 0) {
     vbyte_coding vbyte_coder;
     TestCoding(&vbyte_coder);
-  } else if (strcasecmp(coder_type, "null") == 0) {
+  } else if (strcasecmp(coder_type, coding_methods::kNullCoding) == 0) {
     null_coding null_coder;
     TestCoding(&null_coder);
   } else {
-    fprintf(stderr, "No such coding.\nValid options are 'rice', 'turbo-rice', 'pfor', 's9', 's16', 'vbyte', or 'null'.\n");
+    // List of all available coding methods.
+    const char* kAvailableCodingMethods[] = { coding_methods::kRiceCoding, coding_methods::kTurboRiceCoding, coding_methods::kPForDeltaCoding,
+                                              coding_methods::kS9Coding, coding_methods::kS16Coding, coding_methods::kVarByteCoding,
+                                              coding_methods::kNullCoding };
+    fprintf(stderr, "No such coding.\nValid options are ");
+    int num_available_codings = sizeof(kAvailableCodingMethods) / sizeof(*kAvailableCodingMethods);
+    for (int i = 0; i < num_available_codings; ++i) {
+      const char* curr_available_coding_name = kAvailableCodingMethods[i];
+      if (i == num_available_codings - 1) {
+        fprintf(stderr, "or ");
+      }
+      fprintf(stderr, "'%s'", curr_available_coding_name);
+      if (i < num_available_codings - 1) {
+        fprintf(stderr, ", ");
+      }
+    }
+    fprintf(stderr, ".\n");
   }
 }
