@@ -29,7 +29,6 @@
 // Contains 'main'. Starting point for exploring the program.
 //
 // High Priority:
-// TODO: Abstract away compression/decompression interfaces, including for the block header.
 // TODO: Implement "checkpointing"; if the indexer is killed or even crashes, it should be able to start again without re-indexing everything.
 // TODO: The index cat and diff utilities should fully decode positions (right now it's outputting gap coded ones).
 // TODO: If we allow overlapping docIDs during merge (overlapping over several indices), then when merging positions, must fully decode them for each index
@@ -81,6 +80,7 @@
 #include "index_diff.h"
 #include "index_merge.h"
 #include "index_reader.h"
+#include "index_remapper.h"
 #include "key_value_store.h"
 #include "logger.h"
 #include "query_processor.h"
@@ -92,15 +92,16 @@ struct CommandLineArgs {
   CommandLineArgs() :
     mode(kNoIdea), index1_filename("index.idx"), lexicon1_filename("index.lex"), doc_map1_filename("index.dmap"), meta_info1_filename("index.meta"),
         index2_filename("index.idx"), lexicon2_filename("index.lex"), doc_map2_filename("index.dmap"), meta_info2_filename("index.meta"), merge_degree(0),
-        term(NULL), term_len(0), in_memory_index(false), query_mode(QueryProcessor::kInteractive) {
+        term(NULL), term_len(0), in_memory_index(false), doc_mapping_file(NULL), query_mode(QueryProcessor::kInteractive) {
   }
 
   ~CommandLineArgs() {
     delete[] term;
+    delete[] doc_mapping_file;
   }
 
   enum Mode {
-    kIndex, kMergeInitial, kMergeInput, kQuery, kCat, kDiff, kRetrieveIndexData, kLoopOverIndexData, kNoIdea
+    kIndex, kMergeInitial, kMergeInput, kQuery, kRemap, kCat, kDiff, kRetrieveIndexData, kLoopOverIndexData, kNoIdea
   };
 
   Mode mode;
@@ -121,22 +122,24 @@ struct CommandLineArgs {
 
   bool in_memory_index;
 
+  char* doc_mapping_file;
+
   QueryProcessor::QueryFormat query_mode;
 };
 static CommandLineArgs command_line_args;
 
 static const char document_collections_doc_id_ranges_filename[] = "document_collections_doc_id_ranges";
 
-IndexCollection& GetIndexCollection() {
-  static IndexCollection index_collection;
-  return index_collection;
+CollectionIndexer& GetCollectionIndexer() {
+  static CollectionIndexer collection_indexer;
+  return collection_indexer;
 }
 
 void SignalHandlerIndex(int sig) {
   GetDefaultLogger().Log("Received termination request. Cleaning up now...", false);
 
-  IndexCollection& index_collection = GetIndexCollection();
-  index_collection.OutputDocumentCollectionDocIdRanges(document_collections_doc_id_ranges_filename);
+  CollectionIndexer& collection_indexer = GetCollectionIndexer();
+  collection_indexer.OutputDocumentCollectionDocIdRanges(document_collections_doc_id_ranges_filename);
 
   PostingCollectionController& posting_collection_controller = GetPostingCollectionController();
   // FIXME: It's possible that the parser callback will call this simultaneously as we're cleaning up.
@@ -177,32 +180,32 @@ void Init() {
 
 void Query(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
            QueryProcessor::QueryFormat query_mode) {
-  GetDefaultLogger().Log("Starting query processor with index file '" + logger::Stringify(index_filename) + "', " + "lexicon file '"
-      + logger::Stringify(lexicon_filename) + "', " + "document map file '" + logger::Stringify(doc_map_filename) + "', and " + "meta file '"
-      + logger::Stringify(meta_info_filename) + "'.", false);
+  GetDefaultLogger().Log("Starting query processor with index file '" + Stringify(index_filename) + "', " + "lexicon file '"
+      + Stringify(lexicon_filename) + "', " + "document map file '" + Stringify(doc_map_filename) + "', and " + "meta file '"
+      + Stringify(meta_info_filename) + "'.", false);
 
   QueryProcessor query_processor(index_filename, lexicon_filename, doc_map_filename, meta_info_filename, query_mode);
 }
 
-void Index() {
+void IndexCollection() {
   GetDefaultLogger().Log("Indexing document collection...", false);
 
-  IndexCollection& index_collection = GetIndexCollection();
+  CollectionIndexer& collection_indexer = GetCollectionIndexer();
   // Input to the indexer is a list of document collection files we want to index in order.
-  index_collection.ProcessDocumentCollections(cin);
+  collection_indexer.ProcessDocumentCollections(cin);
 
   // Start timing indexing process.
   Timer index_time;
-  index_collection.ParseTrec();
-  GetDefaultLogger().Log("Time Elapsed: " + logger::Stringify(index_time.GetElapsedTime()), false);
+  collection_indexer.ParseTrec();
+  GetDefaultLogger().Log("Time Elapsed: " + Stringify(index_time.GetElapsedTime()), false);
 
-  index_collection.OutputDocumentCollectionDocIdRanges(document_collections_doc_id_ranges_filename);
+  collection_indexer.OutputDocumentCollectionDocIdRanges(document_collections_doc_id_ranges_filename);
 
   uint64_t posting_count = GetPostingCollectionController().posting_count();
 
   cout << "Collection Statistics:\n";
   cout << "total posting count: " << posting_count << "\n";
-  cout << "total number of documents indexed: " << index_collection.doc_id() << endl;
+  cout << "total number of documents indexed: " << collection_indexer.doc_id() << endl;
 }
 
 // This performs the merge for the complete index starting from the initial 0.0 indices.
@@ -226,7 +229,7 @@ void MergeInitial(int merge_degree) {
   closedir(dir);
 
   const int kDefaultMergeDegree = 64;
-  const bool kDeleteMergedFiles = (Configuration::GetConfiguration().GetValue(config_properties::kDeleteMergedFiles) == "true") ? true : false;
+  const bool kDeleteMergedFiles = Configuration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kDeleteMergedFiles));
   CollectionMerger merger(num_indices, (merge_degree <= 0 ? kDefaultMergeDegree : merge_degree), kDeleteMergedFiles);
 }
 
@@ -236,7 +239,7 @@ void MergeInitial(int merge_degree) {
 // An empty line concludes the list of indices to be merged; but the line prior to the empty line specifies the output name of the meta file.
 // The merged indices will be named in the same manner as the specified output meta file.
 void MergeInput() {
-  const bool kDeleteMergedFiles = (Configuration::GetConfiguration().GetValue(config_properties::kDeleteMergedFiles) == "true") ? true : false;
+  const bool kDeleteMergedFiles = Configuration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kDeleteMergedFiles));
 
   vector<string> input_lines;
   string curr_line;
@@ -483,8 +486,29 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
   delete cache_policy;
 }
 
+// TODO: Name of map should be specified on command line with option.
+//       Name of index should probably be specified as command option as well.
+void RemapIndexDocIds(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename) {
+  IndexRemapper index_remapper(IndexFiles(index_filename, lexicon_filename, doc_map_filename, meta_info_filename), "index_remapped");
+  index_remapper.GenerateMap("url_sorted_doc_id_mapping");
+  index_remapper.Remap();
+}
+
+void GenerateUrlSortedDocIdMappingFile() {
+  GetDefaultLogger().Log("Generating URL sorted docID mapping file...", false);
+
+  CollectionUrlExtractor collection_url_extractor;
+  collection_url_extractor.ProcessDocumentCollections(cin);
+
+  Timer url_extraction_time;
+  collection_url_extractor.ParseTrec("url_sorted_doc_id_mapping");
+  GetDefaultLogger().Log("Time Elapsed: " + Stringify(url_extraction_time.GetElapsedTime()), false);
+}
+
 // Displays usage information.
 // TODO: Update the help information.
+//       URL sorted docID mapping generator (generate-url-sorted-doc-mapping).
+//       (doc-mapping-file)
 void Help() {
   cout << "To index: irtk --index\n";
   cout << "To merge: irtk --merge=[value]\n";
@@ -521,9 +545,12 @@ int main(int argc, char** argv) {
                                       { "cat-term", required_argument, NULL, 0 },
                                       { "diff", no_argument, NULL, 'd' },
                                       { "diff-term", required_argument, NULL, 0 },
+                                      { "remap", no_argument, NULL, 0 },
                                       { "retrieve-index-data", required_argument, NULL, 0 },
                                       { "loop-over-index-data", required_argument, NULL, 0 },
                                       { "in-memory-index", no_argument, NULL, 0 },
+                                      { "doc-mapping-file", required_argument, NULL, 0 },
+                                      { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },
                                       { "test-compression", no_argument, NULL, 0 },
                                       { "test-coder", required_argument, NULL, 0 },
                                       { "help", no_argument, NULL, 'h' },
@@ -576,6 +603,8 @@ int main(int argc, char** argv) {
             command_line_args.query_mode = QueryProcessor::kBatch;
           else
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
+        } else if (strcmp("remap", long_opts[long_index].name) == 0) {
+          command_line_args.mode = CommandLineArgs::kRemap;
         } else if (strcmp("cat-term", long_opts[long_index].name) == 0 || strcmp("diff-term", long_opts[long_index].name) == 0) {
           command_line_args.term_len = strlen(optarg);
           command_line_args.term = new char[command_line_args.term_len];
@@ -592,6 +621,13 @@ int main(int argc, char** argv) {
           memcpy(command_line_args.term, optarg, command_line_args.term_len);
         } else if (strcmp("in-memory-index", long_opts[long_index].name) == 0) {
           command_line_args.in_memory_index = true;
+        } else if (strcmp("doc-mapping-file", long_opts[long_index].name) == 0) {
+          command_line_args.doc_mapping_file = new char[strlen(optarg)];
+          memcpy(command_line_args.doc_mapping_file, optarg, strlen(optarg));
+          // TODO: Should be able to use the docID mapping file during indexing and merging.
+        } else if (strcmp("generate-url-sorted-doc-mapping", long_opts[long_index].name) == 0) {
+          GenerateUrlSortedDocIdMappingFile();
+          return EXIT_SUCCESS;
         } else if (strcmp("test-compression", long_opts[long_index].name) == 0) {
           TestCompression();
           return EXIT_SUCCESS;
@@ -649,7 +685,7 @@ int main(int argc, char** argv) {
 
   switch (command_line_args.mode) {
     case CommandLineArgs::kIndex:
-      Index();
+      IndexCollection();
       break;
     case CommandLineArgs::kQuery:
       Query(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
@@ -660,6 +696,9 @@ int main(int argc, char** argv) {
       break;
     case CommandLineArgs::kMergeInput:
       MergeInput();
+      break;
+    case CommandLineArgs::kRemap:
+      RemapIndexDocIds(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename);
       break;
     case CommandLineArgs::kCat:
       Cat(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,

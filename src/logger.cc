@@ -39,6 +39,8 @@
 #include <ctime>
 
 #include <unistd.h>
+
+#include "globals.h"
 using namespace std;
 
 namespace logger {

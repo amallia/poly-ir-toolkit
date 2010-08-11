@@ -50,7 +50,6 @@
 #include "config_file_properties.h"
 #include "configuration.h"
 #include "globals.h"
-#include "index_layout_parameters.h"
 #include "logger.h"
 #include "meta_file_properties.h"
 #include "timer.h"
@@ -408,15 +407,15 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
 IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename,
                          const char* doc_map_filename, const char* meta_info_filename) :
   purpose_(purpose), document_order_(document_order), kLexiconSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kLexiconSize).c_str())),
-      lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)), cache_manager_(cache_manager), includes_contexts_(false),
-      includes_positions_(false), doc_id_decompressor_(CodingPolicy::kDocId), frequency_decompressor_(CodingPolicy::kFrequency),
+      lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)), cache_manager_(cache_manager), meta_info_(meta_info_filename),
+      includes_contexts_(false), includes_positions_(false), doc_id_decompressor_(CodingPolicy::kDocId), frequency_decompressor_(CodingPolicy::kFrequency),
       position_decompressor_(CodingPolicy::kPosition), block_header_decompressor_(CodingPolicy::kBlockHeader), total_cached_bytes_read_(0),
       total_disk_bytes_read_(0), total_num_lists_accessed_(0) {
   if (kLexiconSize <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kLexiconSize) + "'", true);
   }
 
-  LoadMetaInfo(meta_info_filename);
+  LoadMetaInfo();
 
   coding_policy_helper::LoadPolicyAndCheck(doc_id_decompressor_, meta_info_.GetValue(meta_properties::kIndexDocIdCoding), "docID");
   coding_policy_helper::LoadPolicyAndCheck(frequency_decompressor_, meta_info_.GetValue(meta_properties::kIndexFrequencyCoding), "frequency");
@@ -688,20 +687,7 @@ void IndexReader::LoadDocMap(const char* doc_map_filename) {
   // TODO: Load doc map.
 }
 
-void IndexReader::LoadMetaInfo(const char* meta_info_filename) {
-  meta_info_.LoadKeyValueStore(meta_info_filename);
-
-  string includes_contexts = meta_info_.GetValue(meta_properties::kIncludesContexts);
-  if (includes_contexts.size() > 0) {
-    includes_contexts_ = atoi(includes_contexts.c_str());
-  } else {
-    GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kIncludesContexts) + "' value.", false);
-  }
-
-  string includes_positions = meta_info_.GetValue(meta_properties::kIncludesPositions);
-  if (includes_positions.size() > 0) {
-    includes_positions_ = atoi(includes_positions.c_str());
-  } else {
-    GetErrorLogger().Log("Index meta file missing the '" + string(meta_properties::kIncludesPositions) + "' value.", false);
-  }
+void IndexReader::LoadMetaInfo() {
+  includes_contexts_ = IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesContexts), false);
+  includes_positions_ = IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesPositions), false);
 }

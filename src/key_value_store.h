@@ -44,6 +44,8 @@
 
 class KeyValueStore {
 public:
+  typedef std::pair<std::string, std::string> KeyValuePair;
+
   class Status {
   public:
     enum StatusCode {
@@ -54,7 +56,7 @@ public:
       status_code_(status_code), line_num_(line_num) {
     }
 
-    const char* GetStatusMessage() {
+    const char* GetStatusMessage() const {
       static const char* kStatusMessages[] = { "OK", "Could not open key value store file for reading", "Could not open key value store file for writing",
                                                "Did not find '=' in key value pair line", "No key found", "No value found" };
       return kStatusMessages[status_code_];
@@ -73,14 +75,75 @@ public:
     int line_num_;
   };
 
+  template<class ValueT>
+    class KeyValueResult {
+    public:
+      enum StatusCode {
+        kOk, kNoKey, kNoValue, kImproperBooleanValue, kNumericalValueOutOfRange, kFloatingValueOutOfRange
+      };
+
+      KeyValueResult(StatusCode status_code, const std::string& filename, const std::string& key, const std::string& value, ValueT value_t) :
+        status_code_(status_code), filename_(filename), key_(key), value_(value), value_t_(value_t) {
+      }
+
+      const char* GetStatusMessage() const {
+        static const char* kStatusMessages[] = { "OK", "Key does not exist", "Value not specified", "Boolean value may only be one of 'true' or 'false'",
+                                                 "Numerical value is out of range", "Floating value is out of range" };
+        return kStatusMessages[status_code_];
+      }
+
+      std::string GetErrorMessage() const {
+        return "Error trying to get key '" + key_ + "' with value '" + value_ + "': " + std::string(GetStatusMessage());
+      }
+
+      bool error() const {
+        if (status_code_ != kOk)
+          return true;
+
+        return false;
+      }
+
+      StatusCode status_code() const {
+        return status_code_;
+      }
+
+      const std::string& filename() const {
+        return filename_;
+      }
+
+      const std::string& key() const {
+        return key_;
+      }
+
+      const std::string& value() const {
+        return value_;
+      }
+
+      const ValueT& value_t() const {
+        return value_t_;
+      }
+
+    private:
+      StatusCode status_code_;
+      std::string filename_;
+      std::string key_;
+      std::string value_;
+      ValueT value_t_;
+    };
+
   std::string GetValue(const std::string& key) const;
+  KeyValuePair GetKeyValuePair(const std::string& key) const;
+  KeyValueResult<std::string> GetStringValue(const std::string& key) const;
+  KeyValueResult<bool> GetBooleanValue(const std::string& key) const;
+  KeyValueResult<long int> GetNumericalValue(const std::string& key) const;
+  KeyValueResult<double> GetFloatingValue(const std::string& key) const;
   void AddKeyValuePair(const std::string& key, const std::string& value);
   Status WriteKeyValueStore(const char* filename) const;
   Status LoadKeyValueStore(const char* filename);
 
 private:
-  typedef std::pair<std::string, std::string> KeyValuePair;
   std::vector<KeyValuePair> key_value_store_;
+  std::string loaded_filename_;
 };
 
 #endif /* KEY_VALUE_STORE_H_ */

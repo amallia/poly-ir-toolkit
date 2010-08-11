@@ -30,18 +30,14 @@
 
 #include "configuration.h"
 
-#include <string>
-
-#include "globals.h"
-#include "logger.h"
 using namespace std;
-using namespace logger;
 
-Configuration::Configuration(const char* filename) {
+Configuration::Configuration(const char* filename) :
+  filename_(filename) {
   KeyValueStore::Status status = LoadKeyValueStore(filename);
 
   if (status.status_code() != KeyValueStore::Status::kOk) {
-    GetErrorLogger().Log("Error in configuration file '" + string(filename) + "': " + string(status.GetStatusMessage()) + " on line number: "
+    GetErrorLogger().Log("Error in configuration file '" + filename_ + "': " + string(status.GetStatusMessage()) + " on line number: "
         + Stringify(status.line_num()), true);
   }
 }

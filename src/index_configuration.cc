@@ -26,39 +26,18 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// Global configuration for the IR Toolkit, based on top of the KeyValueStore.
 //==============================================================================================================================================================
 
-#ifndef CONFIGURATION_H_
-#define CONFIGURATION_H_
+#include "index_configuration.h"
 
-#include "key_value_store.h"
+using namespace std;
 
-#include <string>
+IndexConfiguration::IndexConfiguration(const char* filename) :
+  filename_(filename) {
+  KeyValueStore::Status status = LoadKeyValueStore(filename);
 
-#include "globals.h"
-#include "logger.h"
-
-class Configuration : public KeyValueStore {
-public:
-  static const Configuration& GetConfiguration();
-
-  template<typename ValueT>
-    static ValueT GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result);
-
-private:
-  Configuration(const char* filename);
-
-  std::string filename_;
-};
-
-template<typename ValueT>
-  ValueT Configuration::GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result) {
-    if (key_value_result.error()) {
-      GetErrorLogger().Log(std::string("Problem in configuration file '" + key_value_result.filename() + "' (") + key_value_result.GetErrorMessage() + ")", true);
-    }
-
-    return key_value_result.value_t();
+  if (status.status_code() != KeyValueStore::Status::kOk) {
+    GetErrorLogger().Log("Error in index meta file '" + filename_ + "': " + string(status.GetStatusMessage()) + " on line number: "
+        + Stringify(status.line_num()), true);
   }
-
-#endif /* CONFIGURATION_H_ */
+}

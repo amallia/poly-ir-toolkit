@@ -32,17 +32,106 @@
 #include "key_value_store.h"
 
 #include <cctype>
+#include <climits>
+#include <cmath>
+#include <cstdlib>
 
 #include <fstream>
-#include <iostream>
 using namespace std;
 
 string KeyValueStore::GetValue(const string& key) const {
+  return GetKeyValuePair(key).second;
+}
+
+KeyValueStore::KeyValuePair KeyValueStore::GetKeyValuePair(const string& key) const {
   for (vector<KeyValuePair>::const_iterator itr = key_value_store_.begin(); itr != key_value_store_.end(); ++itr) {
-    if (key == itr->first)
-      return itr->second;
+    if (key == itr->first) {
+      return *itr;
+    }
   }
-  return string();
+
+  return KeyValuePair();
+}
+
+KeyValueStore::KeyValueResult<string> KeyValueStore::GetStringValue(const string& key) const {
+  KeyValueResult<string>::StatusCode status_code = KeyValueResult<string>::kOk;
+  KeyValuePair key_value_pair = GetKeyValuePair(key);
+
+  if (!key_value_pair.first.empty()) {
+    if (key_value_pair.second.empty()) {
+      status_code = KeyValueResult<string>::kNoValue;
+    }
+  } else {
+    status_code = KeyValueResult<string>::kNoKey;
+  }
+
+  return KeyValueResult<string> (status_code, loaded_filename_, key_value_pair.first, key_value_pair.second, key_value_pair.second);
+}
+
+KeyValueStore::KeyValueResult<bool> KeyValueStore::GetBooleanValue(const string& key) const {
+  KeyValueResult<bool>::StatusCode status_code = KeyValueResult<bool>::kOk;
+  KeyValuePair key_value_pair = GetKeyValuePair(key);
+  bool value = true;
+
+  if (!key_value_pair.first.empty()) {
+    if (!key_value_pair.second.empty()) {
+      if (key_value_pair.second == "true") {
+        value = true;
+      } else if (key_value_pair.second == "false") {
+        value = false;
+      } else {
+        status_code = KeyValueResult<bool>::kImproperBooleanValue;
+      }
+    } else {
+      status_code = KeyValueResult<bool>::kNoValue;
+    }
+  } else {
+    status_code = KeyValueResult<bool>::kNoKey;
+  }
+
+  return KeyValueResult<bool> (status_code, loaded_filename_, key_value_pair.first, key_value_pair.second, value);
+}
+
+KeyValueStore::KeyValueResult<long int> KeyValueStore::GetNumericalValue(const string& key) const {
+  KeyValueResult<long int>::StatusCode status_code = KeyValueResult<long int>::kOk;
+  KeyValuePair key_value_pair = GetKeyValuePair(key);
+  long int value = 0;
+
+  if (!key_value_pair.first.empty()) {
+    if (!key_value_pair.second.empty()) {
+      value = atol(key_value_pair.second.c_str());
+      if (value == LONG_MAX || value == LONG_MIN) {
+        status_code = KeyValueResult<long int>::kNumericalValueOutOfRange;
+      }
+    } else {
+      status_code = KeyValueResult<long int>::kNoValue;
+    }
+  } else {
+    status_code = KeyValueResult<long int>::kNoKey;
+  }
+
+  return KeyValueResult<long int> (status_code, loaded_filename_, key_value_pair.first, key_value_pair.second, value);
+}
+
+KeyValueStore::KeyValueResult<double> KeyValueStore::GetFloatingValue(const string& key) const {
+  KeyValueResult<double>::StatusCode status_code = KeyValueResult<double>::kOk;
+  KeyValuePair key_value_pair = GetKeyValuePair(key);
+  double value = 0.0;
+
+  if (!key_value_pair.first.empty()) {
+    if (!key_value_pair.second.empty()) {
+      value = atof(key_value_pair.second.c_str());
+      if (value == HUGE_VAL || value == -HUGE_VAL) {
+        status_code = KeyValueResult<double>::kFloatingValueOutOfRange;
+      }
+    } else {
+      status_code = KeyValueResult<double>::kNoValue;
+    }
+  } else {
+    status_code = KeyValueResult<double>::kNoKey;
+  }
+
+  return KeyValueResult<double> (status_code, loaded_filename_, key_value_pair.first, key_value_pair.second, value);
 }
 
 void KeyValueStore::AddKeyValuePair(const string& key, const string& value) {
@@ -50,6 +139,8 @@ void KeyValueStore::AddKeyValuePair(const string& key, const string& value) {
 }
 
 KeyValueStore::Status KeyValueStore::LoadKeyValueStore(const char* filename) {
+  loaded_filename_ = string(filename);
+
   ifstream key_value_stream(filename);
   if (!key_value_stream) {
     return Status(Status::kBadFileRead, 0);

@@ -199,8 +199,15 @@ template<class Callback>
           callback_->ProcessUrl(curr_p, url_p - curr_p, doc_id);
 
           curr_p = url_p + 1;
-          // Skip the rest of the dochdr contents.
-          while (IsWithinBounds(curr_p, buf, buf_len) && *curr_p != '<') {
+          // Skip the rest of the dochdr contents (making sure that we're at the end of the dochdr).
+          while (IsWithinBounds(curr_p, buf, buf_len)) {
+            if (*curr_p == '<') {
+              const char kDocHdrClosingTag[] = "</DOCHDR>";
+              // Make sure it's actually the closing tag.
+              if (IsWithinBounds(curr_p + sizeof(kDocHdrClosingTag) - 1, buf, buf_len) && strncasecmp(curr_p, kDocHdrClosingTag, sizeof(kDocHdrClosingTag) - 1) == 0) {
+                break;
+              }
+            }
             ++curr_p;
           }
 

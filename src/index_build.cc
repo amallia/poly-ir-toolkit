@@ -86,15 +86,22 @@ ChunkEncoder::ChunkEncoder(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* p
                        const CodingPolicy& position_compressor) :
   num_docs_(num_docs), num_properties_(num_properties), size_(0), first_doc_id_(prev_chunk_last_doc_id), last_doc_id_(first_doc_id_),
       compressed_doc_ids_len_(0), compressed_frequencies_len_(0), compressed_positions_len_(0) {
-  for (int i = 0; i < num_docs; ++i) {
+  for (int i = 0; i < num_docs_; ++i) {
     // The docIDs are d-gap coded. We need to decode them (and add them to the last docID from the previous chunk) to find the last docID in this chunk.
     last_doc_id_ += doc_ids[i];
   }
 
-  CompressDocIds(doc_ids, num_docs, doc_id_compressor);
-  CompressFrequencies(frequencies, num_docs, frequency_compressor);
-  if (positions != NULL)
+  CompressDocIds(doc_ids, num_docs_, doc_id_compressor);
+  CompressFrequencies(frequencies, num_docs_, frequency_compressor);
+  if (positions != NULL) {
     CompressPositions(positions, num_properties_, position_compressor);
+  } else {
+    // If the positions weren't included, we must calculate the number of properties based on the frequency values.
+    num_properties_ = 0;
+    for (int i = 0; i < num_docs_; ++i) {
+      num_properties_ += frequencies[i];
+    }
+  }
 
   // Calculate total compressed size of this chunk in words.
   size_ = compressed_doc_ids_len_ + compressed_frequencies_len_ + compressed_positions_len_;

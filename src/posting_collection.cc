@@ -67,6 +67,7 @@
 #include "configuration.h"
 #include "globals.h"
 #include "index_build.h"
+#include "index_util.h"
 #include "logger.h"
 #include "meta_file_properties.h"
 using namespace std;
@@ -403,6 +404,8 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
 // If upon returning, 'decoded_postings_len' is less than the value supplied, then all the postings in this TermBlock have been decoded.
 void TermBlock::DecodePostings(DecodedPosting* decoded_postings, int* decoded_postings_len, Posting* overflow_postings, int* num_overflow_postings,
                                uint32_t overflow_doc_id) {
+  assert(ordered_documents_ == false);
+
   int overflow_postings_i = 0;
   int i;
   for (i = 0; i < *decoded_postings_len; ++i) {
@@ -733,13 +736,9 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 
   sort(&term_blocks[0], &term_blocks[num_term_blocks], TermBlockCompare());
 
-  ostringstream index_filename;
-  index_filename << "index.idx.0." << index_count_;
-
-  ostringstream lexicon_filename;
-  lexicon_filename << "index.lex.0." << index_count_;
-
-  IndexBuilder* index_builder = new IndexBuilder(lexicon_filename.str().c_str(), index_filename.str().c_str(), block_header_compressor_);
+  IndexFiles curr_index_files = IndexFiles(0, index_count_);
+  IndexBuilder* index_builder = new IndexBuilder(curr_index_files.lexicon_filename().c_str(), curr_index_files.index_filename().c_str(),
+                                                 block_header_compressor_);
 
   // Since the following input arrays will be used as input to the various coding policies, and the coding policy might apply a blockwise coding compressor
   // (which would pad the array to the block size), the following rules apply:
@@ -825,15 +824,13 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 
   index_builder->Finalize();
 
-  WriteMetaFile(index_builder);
-
-  ++index_count_;
+  WriteMetaFile(index_builder, curr_index_files.meta_info_filename());
 
   delete[] term_blocks;
   delete index_builder;
 }
 
-void PostingCollection::WriteMetaFile(IndexBuilder* index_builder) {
+void PostingCollection::WriteMetaFile(const IndexBuilder* index_builder, const string& meta_filename) {
   KeyValueStore index_metafile;
   ostringstream metafile_values;
 
@@ -917,9 +914,7 @@ void PostingCollection::WriteMetaFile(IndexBuilder* index_builder) {
   index_metafile.AddKeyValuePair(meta_properties::kTotalWastedBytes, metafile_values.str());
   metafile_values.str("");
 
-  ostringstream meta_filename;
-  meta_filename << "index.meta.0." << index_count_;
-  index_metafile.WriteKeyValueStore(meta_filename.str().c_str());
+  index_metafile.WriteKeyValueStore(meta_filename.c_str());
 }
 
 // TODO: If the load factor in the hash table is too high, we can dump the run to disk.

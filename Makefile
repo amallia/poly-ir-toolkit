@@ -13,9 +13,11 @@ OBJS =		src/cache_manager.o \
 			src/globals.o \
 			src/index_build.o \
 			src/index_cat.o \
+			src/index_configuration.o \
 			src/index_diff.o \
 			src/index_merge.o \
 			src/index_reader.o \
+			src/index_remapper.o \
 			src/index_util.o \
 			src/ir_toolkit.o \
 			src/key_value_store.o \
@@ -57,4 +59,4 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 
 clear:
-	rm -f document_collections_doc_id_ranges index.idx* index.lex* index.meta* index.dmap*
+	rm -f document_collections_doc_id_ranges index*.idx* index*.lex* index*.meta* index*.dmap*

@@ -110,6 +110,19 @@ static const char kMaxNumberResults[] = "max_number_results";
 // Controls whether positions will be utilized if the index was built with positions.
 static const char kUsePositions[] = "use_positions";
 
+/**************************************************************************************************************************************************************
+ * Index DocID Remapping Parameters
+ *
+ **************************************************************************************************************************************************************/
+// Controls whether intermediate remapped index files should be deleted (Saves considerable disk space).
+static const char kDeleteIntermediateRemappedFiles[] = "delete_intermediate_remapped_files";
+
+// Size of the buffer (in MiB) to hold index entries.
+static const char kIndexEntryBufferSize[] = "index_entry_buffer_size";
+
+// Size of the positions pool buffer (in MiB). Only allocated if the index to be remapped holds positions.
+static const char kPositionsPoolBufferSize[] = "positions_pool_buffer_size";
+
 } // namespace config_properties
 
 #endif /* CONFIG_FILE_PROPERTIES_H_ */

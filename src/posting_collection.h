@@ -409,7 +409,7 @@ public:
   bool InsertPosting(const Posting& posting);
   void AddLeftOverPosting(const char* term, int term_len);
   void DumpRun(bool out_of_memory_dump);
-  void WriteMetaFile(IndexBuilder* index_builder);
+  void WriteMetaFile(const IndexBuilder* index_builder, const std::string& meta_filename);
   bool ReachedThreshold() const;
 
   OverflowPostings GetOverflowPostings() {

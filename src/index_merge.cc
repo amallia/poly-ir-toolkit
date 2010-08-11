@@ -547,7 +547,7 @@ float IndexMerger::QueryProgress() const {
 // Assumes that we're doing an initial merge of the whole collection.
 CollectionMerger::CollectionMerger(int num_initial_indices, int merge_degree, bool delete_merged_files) :
   kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files), curr_merger_(NULL), curr_merger_active_(false) {
-  GetDefaultLogger().Log("Merging " + logger::Stringify(num_initial_indices) + " indices with merge degree " + logger::Stringify(merge_degree), false);
+  GetDefaultLogger().Log("Merging " + Stringify(num_initial_indices) + " indices with merge degree " + Stringify(merge_degree), false);
 
   vector<IndexFiles> input_index_files;
   for (int i = 0; i < num_initial_indices; ++i) {
@@ -561,14 +561,14 @@ CollectionMerger::CollectionMerger(int num_initial_indices, int merge_degree, bo
 // Doesn't assume anything about the filenames of the indices to merge, but output index files will be named as if we were doing an initial merge.
 CollectionMerger::CollectionMerger(const vector<IndexFiles>& input_index_files, int merge_degree, bool delete_merged_files) :
   kMergeDegree(merge_degree), kDeleteMergedFiles(delete_merged_files), curr_merger_(NULL), curr_merger_active_(false) {
-  GetDefaultLogger().Log("Merging " + logger::Stringify(input_index_files.size()) + " indices with merge degree " + logger::Stringify(merge_degree), false);
+  GetDefaultLogger().Log("Merging " + Stringify(input_index_files.size()) + " indices with merge degree " + Stringify(merge_degree), false);
   Partition(input_index_files, 1);
 }
 
 // Does a merge of all the input indices in one pass, with the output index filenames specified.
 CollectionMerger::CollectionMerger(const vector<IndexFiles>& input_index_files, const IndexFiles& output_index_files, bool delete_merged_files) :
   kMergeDegree(input_index_files.size()), kDeleteMergedFiles(delete_merged_files), curr_merger_(NULL), curr_merger_active_(false) {
-  GetDefaultLogger().Log("Merging " + logger::Stringify(input_index_files.size()) + " indices with merge degree " + logger::Stringify(input_index_files.size()),
+  GetDefaultLogger().Log("Merging " + Stringify(input_index_files.size()) + " indices with merge degree " + Stringify(input_index_files.size()),
                          false);
 
   if (kDeleteMergedFiles && input_index_files.size() == 1) {

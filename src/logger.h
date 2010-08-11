@@ -33,7 +33,6 @@
 #ifndef LOGGER_H_
 #define LOGGER_H_
 
-#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -78,16 +77,6 @@ private:
   void (*cleanup_handler_)(void);
   static std::vector<std::pair<int, pthread_mutex_t*> > fd_lock_mapping_;
 };
-
-template<typename T>
-  std::string Stringify(const T& t);
-
-template<typename T>
-  std::string Stringify(const T& t) {
-    std::ostringstream iss;
-    iss << t;
-    return iss.str();
-  }
 
 } // namespace logger
 

@@ -26,11 +26,12 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// Global configuration for the IR Toolkit, based on top of the KeyValueStore.
+// Each index has a meta file that describes the standard properties it was indexed with. This class provides access to those values. It is built on top of the
+// KeyValueStore.
 //==============================================================================================================================================================
 
-#ifndef CONFIGURATION_H_
-#define CONFIGURATION_H_
+#ifndef INDEX_CONFIGURATION_H_
+#define INDEX_CONFIGURATION_H_
 
 #include "key_value_store.h"
 
@@ -39,26 +40,24 @@
 #include "globals.h"
 #include "logger.h"
 
-class Configuration : public KeyValueStore {
+class IndexConfiguration : public KeyValueStore {
 public:
-  static const Configuration& GetConfiguration();
+  IndexConfiguration(const char* filename);
 
   template<typename ValueT>
-    static ValueT GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result);
+    static ValueT GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result, bool exit_on_error);
 
 private:
-  Configuration(const char* filename);
-
   std::string filename_;
 };
 
 template<typename ValueT>
-  ValueT Configuration::GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result) {
+  ValueT IndexConfiguration::GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result, bool exit_on_error) {
     if (key_value_result.error()) {
-      GetErrorLogger().Log(std::string("Problem in configuration file '" + key_value_result.filename() + "' (") + key_value_result.GetErrorMessage() + ")", true);
+      GetErrorLogger().Log(std::string("Problem in index meta file '" + key_value_result.filename() + "' (") + key_value_result.GetErrorMessage() + ")", exit_on_error);
     }
 
     return key_value_result.value_t();
   }
 
-#endif /* CONFIGURATION_H_ */
+#endif /* INDEX_CONFIGURATION_H_ */

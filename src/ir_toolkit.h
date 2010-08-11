@@ -31,7 +31,7 @@
 #ifndef IR_TOOLKIT_H_
 #define IR_TOOLKIT_H_
 
-class IndexCollection;
-IndexCollection& GetIndexCollection();
+class CollectionIndexer;
+CollectionIndexer& GetCollectionIndexer();
 
 #endif /* IR_TOOLKIT_H_ */

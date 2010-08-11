@@ -31,6 +31,8 @@
 #ifndef GLOBALS_H_
 #define GLOBALS_H_
 
+#include <sstream>
+
 namespace logger {
 class Logger;
 };
@@ -38,5 +40,15 @@ class Logger;
 logger::Logger& GetDefaultLogger();
 
 logger::Logger& GetErrorLogger();
+
+template<typename T>
+  std::string Stringify(const T& t);
+
+template<typename T>
+  std::string Stringify(const T& t) {
+    std::ostringstream iss;
+    iss << t;
+    return iss.str();
+  }
 
 #endif /* GLOBALS_H_ */

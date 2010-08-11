@@ -34,6 +34,7 @@
 
 #include <iostream>
 #include <string>
+#include <utility>
 
 #include <strings.h>
 
@@ -41,30 +42,58 @@
 #include "logger.h"
 #include "posting_collection.h"
 
+/**************************************************************************************************************************************************************
+ * ParserCallback
+ *
+ **************************************************************************************************************************************************************/
 class ParserCallback {
 public:
-  ParserCallback(PostingCollectionController* posting_collection_controller);
+  void ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context) {
+  }
+
+  // URLs could begin with "http://".
+  // Might want to strip "#" from URLs.
+  void ProcessUrl(const char* url, int url_len, uint32_t doc_id) {
+  }
+
+  // Indicates the start of a new document.
+  // The TREC DOCNO specifies the document bundle folder, bundle file, and the document's byte offset within the uncompressed bundle file.
+  void ProcessDocno(const char* docno, int docno_len, uint32_t doc_id) {
+  }
+
+  void ProcessDocLength(int doc_length, uint32_t doc_id) {
+  }
+
+  // Out links might need to be concatenated with the base URL (if they're relative URLs).
+  void ProcessLink(const char* url, int url_len, uint32_t doc_id) {
+  }
+};
+
+/**************************************************************************************************************************************************************
+ * IndexingParserCallback
+ *
+ **************************************************************************************************************************************************************/
+class IndexingParserCallback : public ParserCallback {
+public:
+  IndexingParserCallback(PostingCollectionController* posting_collection_controller);
+
   void ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context);
-  void ProcessUrl(const char* url, int url_len, uint32_t doc_id);
-  void ProcessDocno(const char* docno, int docno_len, uint32_t doc_id);
-  void ProcessDocLength(int doc_length, uint32_t doc_id);
-  void ProcessLink(const char* url, int url_len, uint32_t doc_id);
 
 private:
   PostingCollectionController* posting_collection_controller_;
 };
 
-inline ParserCallback::ParserCallback(PostingCollectionController* posting_collection_controller) :
+inline IndexingParserCallback::IndexingParserCallback(PostingCollectionController* posting_collection_controller) :
   posting_collection_controller_(posting_collection_controller) {
 }
 
-inline void ParserCallback::ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context) {
+inline void IndexingParserCallback::ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context) {
   // TODO: Detects skips in docIDs. Assumes docIDs assigned sequentially. For catching potential parser bugs.
   static int lost_doc_id_count = 0;
   static uint32_t prev_doc_id = 0;
   if (doc_id > prev_doc_id) {
     if (doc_id > (prev_doc_id + 1)) {
-      GetErrorLogger().Log("No postings for docID: " + logger::Stringify(prev_doc_id + 1) + " and " + logger::Stringify(doc_id - prev_doc_id - 2)
+      GetErrorLogger().Log("No postings for docID: " + Stringify(prev_doc_id + 1) + " and " + Stringify(doc_id - prev_doc_id - 2)
           + " more docs.", false);
       lost_doc_id_count += (doc_id - prev_doc_id - 1);
     }
@@ -75,21 +104,26 @@ inline void ParserCallback::ProcessTerm(const char* term, int term_len, uint32_t
   posting_collection_controller_->InsertPosting(posting);
 }
 
-inline void ParserCallback::ProcessUrl(const char* url, int url_len, uint32_t doc_id) {
-  // URLs could begin with "http://".
-  // Might want to strip "#" from URLs.
-}
+/**************************************************************************************************************************************************************
+ * DocUrlRetrievalParserCallback
+ *
+ **************************************************************************************************************************************************************/
+class DocUrlRetrievalParserCallback : public ParserCallback {
+public:
+  void ProcessUrl(const char* url, int url_len, uint32_t doc_id);
 
-inline void ParserCallback::ProcessDocLength(int doc_length, uint32_t doc_id) {
-}
+  std::vector<std::pair<std::string, uint32_t> >& document_urls() {
+    return document_urls_;
+  }
 
-// Indicates the start of a new document.
-// The TREC DOCNO specifies the document bundle folder, bundle file, and the document's byte offset within the uncompressed bundle file.
-inline void ParserCallback::ProcessDocno(const char* docno, int docno_len, uint32_t doc_id) {
-}
+private:
+  std::vector<std::pair<std::string, uint32_t> > document_urls_;
+};
 
-inline void ParserCallback::ProcessLink(const char* url, int url_len, uint32_t doc_id) {
-  // Out links might need to be concatenated with the base URL (if they're relative URLs).
+inline void DocUrlRetrievalParserCallback::ProcessUrl(const char* url, int url_len, uint32_t doc_id) {
+  const char kCommonUrlPrefix[] = "http://";
+  const int kCommonUrlPrefixLen = sizeof(kCommonUrlPrefix) - 1;
+  document_urls_.push_back(make_pair(std::string(url + kCommonUrlPrefixLen, url_len - kCommonUrlPrefixLen), doc_id));
 }
 
 #endif /* PARSER_CALLBACK_H_ */

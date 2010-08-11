@@ -43,9 +43,13 @@
 class IndexFiles {
 public:
   IndexFiles();
+  IndexFiles(const std::string& prefix);
   IndexFiles(int group_num, int file_num);
+  IndexFiles(const std::string& prefix, int group_num, int file_num);
   IndexFiles(const std::string& index_filename, const std::string& lexicon_filename, const std::string& document_map_filename,
              const std::string& meta_info_filename);
+
+  void UpdateNums(int group_num, int file_num);
 
   void SetDirectory(const std::string& dir);
 
@@ -66,6 +70,9 @@ public:
   }
 
 private:
+  void InitIndexFiles(const std::string& prefix, int group_num, int file_num);
+
+  std::string prefix_;
   std::string index_filename_;
   std::string lexicon_filename_;
   std::string document_map_filename_;

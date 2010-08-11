@@ -38,8 +38,8 @@
 #include "cache_manager.h"
 #include "coding_policy.h"
 #include "coding_policy_helper.h"
+#include "index_configuration.h"
 #include "index_layout_parameters.h"
-#include "key_value_store.h"
 #include "term_hash_table.h"
 
 /**************************************************************************************************************************************************************
@@ -502,7 +502,7 @@ public:
   const char* GetDocUrl(uint32_t doc_id);
 
   void LoadDocMap(const char* doc_map_filename);
-  void LoadMetaInfo(const char* meta_info_filename);
+  void LoadMetaInfo();
 
   void ResetStats() {
     total_cached_bytes_read_ = 0;
@@ -514,7 +514,7 @@ public:
     return lexicon_;
   }
 
-  const KeyValueStore& meta_info() const {
+  const IndexConfiguration& meta_info() const {
     return meta_info_;
   }
 
@@ -565,7 +565,7 @@ private:
   const long int kLexiconSize;         // The size of the hash table for the lexicon.
   Lexicon lexicon_;                    // The lexicon data structure.
   CacheManager& cache_manager_;        // Manages the block cache.
-  KeyValueStore meta_info_;            // The index meta information.
+  IndexConfiguration meta_info_;       // The index meta information.
   bool includes_contexts_;             // True if the index contains context data.
   bool includes_positions_;            // True if the index contains position data.
 

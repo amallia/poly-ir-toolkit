@@ -136,14 +136,26 @@ private:
 /**************************************************************************************************************************************************************
  * IndexCollection
  *
- * Responsible for multiple DocumentCollection objects. This represents the whole collection we're indexing.
+ * Responsible for all the DocumentCollection objects that are part of the index we'll be operating on.
  **************************************************************************************************************************************************************/
 class IndexCollection {
 public:
-  IndexCollection();
-  ~IndexCollection();
-  void AddCollection(const std::string&);
-  void ProcessDocumentCollections(std::istream&);
+  void AddDocumentCollection(const std::string& path);
+  void ProcessDocumentCollections(std::istream& is);
+
+protected:
+  std::vector<DocumentCollection> doc_collections_;
+};
+
+/**************************************************************************************************************************************************************
+ * CollectionIndexer
+ *
+ * Responsible for indexing the document collection.
+ **************************************************************************************************************************************************************/
+class CollectionIndexer : public IndexCollection {
+public:
+  CollectionIndexer();
+  ~CollectionIndexer();
   void ParseTrec();
   void OutputDocumentCollectionDocIdRanges(const char* filename);
 
@@ -156,10 +168,29 @@ private:
   int document_collection_buffer_size_;
   char* document_collection_buffer_;
 
-  ParserCallback parser_callback_;
-  Parser<ParserCallback> parser_;
+  IndexingParserCallback parser_callback_;
+  Parser<IndexingParserCallback> parser_;
 
-  std::vector<DocumentCollection> doc_collections_;
+  uint32_t doc_id_;  // Keeps the running docID, which will either be updated by the parser or externally, depending on what mode the parser is in.
+  int avg_doc_length_;
+};
+
+/**************************************************************************************************************************************************************
+ * CollectionUrlExtractor
+ *
+ **************************************************************************************************************************************************************/
+class CollectionUrlExtractor : public IndexCollection {
+public:
+  CollectionUrlExtractor();
+  ~CollectionUrlExtractor();
+  void ParseTrec(const char* document_urls_filename);
+
+private:
+  int document_collection_buffer_size_;
+  char* document_collection_buffer_;
+
+  DocUrlRetrievalParserCallback parser_callback_;
+  Parser<DocUrlRetrievalParserCallback> parser_;
 
   uint32_t doc_id_;  // Keeps the running docID, which will either be updated by the parser or externally, depending on what mode the parser is in.
   int avg_doc_length_;
