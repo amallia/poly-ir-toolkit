@@ -173,7 +173,7 @@ private:
  **************************************************************************************************************************************************************/
 class CacheManager {
 public:
-  CacheManager(const char* index_filename, uint64_t cache_size);
+  CacheManager(const char* index_filename);
   virtual ~CacheManager();
 
   virtual int QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) = 0;
@@ -189,14 +189,27 @@ public:
   static const uint64_t kBlockSize = BLOCK_SIZE;  // The block size in number of bytes.
 
 protected:
-  static const uint64_t kIndexSizedCache;  // Sentinel value that when passed into the constructor as the 'cache_size' parameter, will cause the cache manager
-                                           // to allocate as much space for the cache as there are blocks in the whole index.
-  const int kIndexFd;                      // File descriptor for the inverted index file.
-  const uint64_t kTotalIndexBlocks;        // The total number of blocks in this inverted index file.
-  const uint64_t kCacheSize;               // Size of this cache in number of blocks.
-  uint32_t* block_cache_;                  // Pointer to the memory allocated for the block cache.
+  const int kIndexFd;                // File descriptor for the inverted index file.
+  const uint64_t kTotalIndexBlocks;  // The total number of blocks in this inverted index file.
 private:
   uint64_t CalculateTotalIndexBlocks() const;
+};
+
+/**************************************************************************************************************************************************************
+ * AllocatedCacheManager
+ *
+ * Abstract base class that provides an interface to build new caching policies based on memory allocation of blocks.
+ **************************************************************************************************************************************************************/
+class AllocatedCacheManager : public CacheManager {
+public:
+  AllocatedCacheManager(const char* index_filename, uint64_t cache_size);
+  virtual ~AllocatedCacheManager();
+
+protected:
+  static const uint64_t kIndexSizedCache;  // Sentinel value that when passed into the constructor as the 'cache_size' parameter, will cause the cache manager
+                                           // to allocate as much space for the cache as there are blocks in the whole index.
+  const uint64_t kCacheSize;               // Size of this cache in number of blocks.
+  uint32_t* block_cache_;                  // Pointer to the memory allocated for the block cache.
 };
 
 /**************************************************************************************************************************************************************
@@ -204,7 +217,7 @@ private:
  *
  * Implements a caching policy for blocks. It is concurrent safe for multiple queries running simultaneously.
  **************************************************************************************************************************************************************/
-class LruCachePolicy : public CacheManager {
+class LruCachePolicy : public AllocatedCacheManager {
 public:
   LruCachePolicy(const char* index_filename);
   ~LruCachePolicy();
@@ -246,7 +259,7 @@ private:
  * We also know when merging lists, we'll be reading the index sequentially, so whenever we try to access a block not in the cache, we might as well flush the
  * cache and fill it with the next several blocks.
  **************************************************************************************************************************************************************/
-class MergingCachePolicy : public CacheManager {
+class MergingCachePolicy : public AllocatedCacheManager {
 public:
   MergingCachePolicy(const char* index_filename);
   ~MergingCachePolicy();
@@ -269,7 +282,7 @@ private:
  * Loads the full index into a contiguous block of main memory. Eliminates the overheads associated with various caching policies
  * (assuming you have enough main memory).
  **************************************************************************************************************************************************************/
-class FullContiguousCachePolicy : public CacheManager {
+class FullContiguousCachePolicy : public AllocatedCacheManager {
 public:
   FullContiguousCachePolicy(const char* index_filename);
   ~FullContiguousCachePolicy();
@@ -282,6 +295,28 @@ public:
 
 private:
   void FillCache();
+};
+
+/**************************************************************************************************************************************************************
+ * MemoryMappedCachePolicy
+ *
+ * Memory maps the entire index into our address space. Note that this will not work on 32-bit systems when the index file is very large because it won't be
+ * able to fit into the address space.
+ **************************************************************************************************************************************************************/
+class MemoryMappedCachePolicy : public CacheManager {
+public:
+  MemoryMappedCachePolicy(const char* index_filename);
+  ~MemoryMappedCachePolicy();
+
+  int QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num);
+
+  uint32_t* GetBlock(uint64_t block_num);
+
+  void FreeBlock(uint64_t block_num);
+
+private:
+  off_t index_size_;  // Size of the index in bytes.
+  uint32_t* index_;   // Pointer into the index file that's memory mapped.
 };
 
 #endif /* CACHE_MANAGER_H_ */

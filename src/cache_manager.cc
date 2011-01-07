@@ -37,6 +37,7 @@
 #include <cstring>
 
 #include <fcntl.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -53,13 +54,9 @@ using namespace std;
  *
  **************************************************************************************************************************************************************/
 const uint64_t CacheManager::kBlockSize;  // Initialized in the class definition.
-const uint64_t CacheManager::kIndexSizedCache = numeric_limits<uint64_t>::max();
 
-CacheManager::CacheManager(const char* index_filename, uint64_t cache_size) :
-  kIndexFd(open(index_filename, O_RDONLY)), kTotalIndexBlocks(CalculateTotalIndexBlocks()),
-      kCacheSize(cache_size == CacheManager::kIndexSizedCache ? kTotalIndexBlocks : cache_size),
-      block_cache_(new uint32_t[kBlockSize * kCacheSize / sizeof(*block_cache_)]) {
-  assert(kCacheSize != 0);
+CacheManager::CacheManager(const char* index_filename) :
+  kIndexFd(open(index_filename, O_RDONLY)), kTotalIndexBlocks(CalculateTotalIndexBlocks()) {
   if (kIndexFd < 0) {
     GetErrorLogger().LogErrno("open() in CacheManager::CacheManager(), trying to open index file", errno, true);
   }
@@ -70,7 +67,6 @@ CacheManager::~CacheManager() {
   if (close_ret < 0) {
     GetErrorLogger().LogErrno("close() in CacheManager::~CacheManager(), trying to close index file", errno, false);
   }
-  delete[] block_cache_;
 }
 
 uint64_t CacheManager::CalculateTotalIndexBlocks() const {
@@ -83,6 +79,23 @@ uint64_t CacheManager::CalculateTotalIndexBlocks() const {
 }
 
 /**************************************************************************************************************************************************************
+ * AllocatedCacheManager
+ *
+ **************************************************************************************************************************************************************/
+const uint64_t AllocatedCacheManager::kIndexSizedCache = numeric_limits<uint64_t>::max();
+
+AllocatedCacheManager::AllocatedCacheManager(const char* index_filename, uint64_t cache_size) :
+  CacheManager(index_filename),
+  kCacheSize(cache_size == kIndexSizedCache ? kTotalIndexBlocks : cache_size),
+  block_cache_(new uint32_t[kBlockSize * kCacheSize / sizeof(*block_cache_)]) {
+  assert(kCacheSize != 0);
+}
+
+AllocatedCacheManager::~AllocatedCacheManager() {
+  delete[] block_cache_;
+}
+
+/**************************************************************************************************************************************************************
  * LruCachePolicy
  *
  * The cache size is assumed to be big enough to hold this many blocks: (# of unique words in query) * (# of blocks of read ahead per list).
@@ -90,7 +103,8 @@ uint64_t CacheManager::CalculateTotalIndexBlocks() const {
  * Thus all queued blocks are pinned.  They will all have to be freed by the caller.
  **************************************************************************************************************************************************************/
 LruCachePolicy::LruCachePolicy(const char* index_filename) :
-  CacheManager(index_filename, atol(Configuration::GetConfiguration().GetValue(config_properties::kBlockCacheSize).c_str())), cache_block_info_(kCacheSize) {
+  AllocatedCacheManager(index_filename, atol(Configuration::GetConfiguration().GetValue(config_properties::kBlockCacheSize).c_str())),
+  cache_block_info_(kCacheSize) {
   pthread_mutex_init(&query_mutex_, NULL);
 
   for (uint64_t i = 0; i < kCacheSize; ++i) {
@@ -254,7 +268,7 @@ LruCachePolicy::LruList::iterator LruCachePolicy::MoveToBack(LruList::iterator l
  *
  **************************************************************************************************************************************************************/
 MergingCachePolicy::MergingCachePolicy(const char* index_filename) :
-  CacheManager(index_filename, 32), initial_cache_block_num_(0) {
+  AllocatedCacheManager(index_filename, 32), initial_cache_block_num_(0) {
   // Fill the cache initially.
   FillCache(0);
 }
@@ -289,7 +303,8 @@ void MergingCachePolicy::FillCache(uint64_t block_num) {
 
 // Returns the number of blocks read in from the disk (all of them).
 // For the last time QueueBlocks() is called, it will not necessarily return the correct number of blocks read from disk,
-// because there might have been more blocks requested than there are left in the index.
+// because there might have been more blocks requested than there are left in the index. NOTE: This is no longer the case
+// because we now store the total number of blocks in a list and don't request more blocks than there are in the list.
 int MergingCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
   // Nothing to be done when merging.
   return ending_block_num - starting_block_num;
@@ -304,7 +319,7 @@ void MergingCachePolicy::FreeBlock(uint64_t block_num) {
  *
  **************************************************************************************************************************************************************/
 FullContiguousCachePolicy::FullContiguousCachePolicy(const char* index_filename) :
-  CacheManager(index_filename, CacheManager::kIndexSizedCache) {
+  AllocatedCacheManager(index_filename, AllocatedCacheManager::kIndexSizedCache) {
   FillCache();
 }
 
@@ -339,10 +354,60 @@ void FullContiguousCachePolicy::FillCache() {
 
 // Returns the number of blocks read in from the disk (none, since the index was fully loaded into memory).
 // For the last time QueueBlocks() is called, it will not necessarily return the correct number of blocks read from disk,
-// because there might have been more blocks requested than there are left in the index.
+// because there might have been more blocks requested than there are left in the index. NOTE: This is no longer the case
+// because we now store the total number of blocks in a list and don't request more blocks than there are in the list.
 int FullContiguousCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
   return 0;
 }
 
 void FullContiguousCachePolicy::FreeBlock(uint64_t block_num) {
+}
+
+/**************************************************************************************************************************************************************
+ * MemoryMappedCachePolicy
+ *
+ **************************************************************************************************************************************************************/
+MemoryMappedCachePolicy::MemoryMappedCachePolicy(const char* index_filename) :
+  CacheManager(index_filename),
+  index_size_(0),
+  index_(NULL) {
+  struct stat stat_buf;
+  if (fstat(kIndexFd, &stat_buf) < 0) {
+    GetErrorLogger().LogErrno("fstat() in MemoryMappedCachePolicy::MemoryMappedCachePolicy()", errno, true);
+  }
+
+  index_size_ = stat_buf.st_size;
+
+  void* src;
+  if ((src = mmap(0, index_size_, PROT_READ, MAP_SHARED, kIndexFd, 0)) == MAP_FAILED) {
+    GetErrorLogger().LogErrno("mmap() in MemoryMappedCachePolicy::MemoryMappedCachePolicy()", errno, true);
+  }
+
+  index_ = static_cast<uint32_t*> (src);
+
+  // Loop over the index to make sure it's been read into memory.
+  uint32_t index_data;
+  assert(index_size_ % sizeof(*index_) == 0);
+  uint64_t index_size_ints = index_size_ / sizeof(*index_);
+  for (uint64_t i = 0; i < index_size_ints; ++i) {
+    index_data = index_[i];
+  }
+}
+
+MemoryMappedCachePolicy::~MemoryMappedCachePolicy() {
+  if (munmap(index_, index_size_) < 0) {
+    GetErrorLogger().LogErrno("munmap() in MemoryMappedCachePolicy::~MemoryMappedCachePolicy()", errno, true);
+  }
+}
+
+uint32_t* MemoryMappedCachePolicy::GetBlock(uint64_t block_num) {
+  return index_ + (block_num * (kBlockSize / sizeof(*index_)));
+}
+
+// Returns the number of blocks read in from the disk (since the index is memory mapped and we don't know, just return none).
+int MemoryMappedCachePolicy::QueueBlocks(uint64_t starting_block_num, uint64_t ending_block_num) {
+  return 0;
+}
+
+void MemoryMappedCachePolicy::FreeBlock(uint64_t block_num) {
 }
