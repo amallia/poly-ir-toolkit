@@ -34,6 +34,15 @@
 
 namespace meta_properties {
 
+// Whether the index is layered.
+static const char kLayeredIndex[] = "layered_index";
+
+// The (max) number of layers that the index was built with (only for layered indices).
+static const char kNumLayers[] = "num_layers";
+
+// Whether the index layers are overlapping (only for layered indices).
+static const char kOverlappingLayers[] = "overlapping_layers";
+
 // Whether the index was indexed with position data.
 static const char kIncludesPositions[] = "includes_positions";
 
@@ -51,6 +60,12 @@ static const char kIndexPositionCoding[] = "index_position_coding";
 
 // The coding policy with which the block headers are compressed.
 static const char kIndexBlockHeaderCoding[] = "index_block_header_coding";
+
+// The total number of chunks in this index.
+static const char kTotalNumChunks[] = "total_num_chunks";
+
+// The total number of per term blocks in this index (as if each term had it's own block, not shared with other terms).
+static const char kTotalNumPerTermBlocks[] = "total_num_per_term_blocks";
 
 // The sum of all document lengths in the index (length is based on the position of the last posting relating to a particular docID).
 static const char kTotalDocumentLengths[] = "total_document_lengths";
