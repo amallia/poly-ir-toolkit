@@ -38,11 +38,14 @@ namespace config_properties {
  * Indexing Parameters
  *
  **************************************************************************************************************************************************************/
-// Size of the hash table used for posting accumulation.
-static const char kHashTableSize[] = "hash_table_size";
+// Document collection format.
+static const char kDocumentCollectionFormat[] = "document_collection_format";
 
 // The initial buffer size to use for uncompressing document collection files.
 static const char kDocumentCollectionBufferSize[] = "document_collection_buffer_size";
+
+// Size of the hash table used for posting accumulation.
+static const char kHashTableSize[] = "hash_table_size";
 
 // Size of the memory pool for posting accumulation.
 static const char kMemoryPoolSize[] = "memory_pool_size";
@@ -89,11 +92,25 @@ static const char kMergingPositionCoding[] = "merging_position_coding";
 static const char kMergingBlockHeaderCoding[] = "merging_block_header_coding";
 
 /**************************************************************************************************************************************************************
+ * Layering Parameters
+ *
+ **************************************************************************************************************************************************************/
+// Controls whether the layers are overlapping or not. If they are, successive layers will always be a superset of the previous layers.
+static const char kOverlappingLayers[] = "overlapping_layers";
+
+// This is subject to 'MAX_LIST_LAYERS' defined in 'index_layout_parameters.h'. It controls the (max) number of layers we should have per list.
+static const char kNumLayers[] = "num_layers";
+
+/**************************************************************************************************************************************************************
  * Querying Parameters
  *
  **************************************************************************************************************************************************************/
 // Sets whether the whole index will be read into main memory. If true, the 'block_cache_size' and 'read_ahead_blocks' options are ignored.
 static const char kMemoryResidentIndex[] = "memory_resident_index";
+
+// Sets whether the whole index will be memory mapped into the process address space. If true, the 'block_cache_size' and 'read_ahead_blocks' options are ignored.
+// This option has precedence over the 'memory_resident_index' option when both are true.
+static const char kMemoryMappedIndex[] = "memory_mapped_index";
 
 // The number of blocks to cache in memory.
 static const char kBlockCacheSize[] = "block_cache_size";
