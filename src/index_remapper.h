@@ -40,57 +40,6 @@
 #include "index_util.h"
 
 /**************************************************************************************************************************************************************
- * PositionsPool
- *
- **************************************************************************************************************************************************************/
-class PositionsPool {
-public:
-  PositionsPool() :
-    size_(0), curr_offset_(0), positions_(NULL) {
-  }
-
-  PositionsPool(int size) :
-    size_(size), curr_offset_(0), positions_(new uint32_t[size_]) {
-  }
-
-  ~PositionsPool() {
-    delete[] positions_;
-  }
-
-  uint32_t* StorePositions(const uint32_t* positions, int num_positions) {
-    assert(positions_ != NULL);
-
-    if (curr_offset_ + num_positions < size_) {
-      for (int i = 0; i < num_positions; ++i) {
-        positions_[curr_offset_ + i] = positions[i];
-      }
-      curr_offset_ += num_positions;
-      return positions_ + (curr_offset_ - num_positions);
-    }
-    return NULL;
-  }
-
-  void Reset() {
-    curr_offset_ = 0;
-  }
-
-private:
-  int size_;
-  int curr_offset_;
-  uint32_t* positions_;
-};
-
-/**************************************************************************************************************************************************************
- * IndexEntry
- *
- **************************************************************************************************************************************************************/
-struct IndexEntry {
-  uint32_t doc_id;
-  uint32_t frequency;
-  uint32_t* positions;
-};
-
-/**************************************************************************************************************************************************************
  * IndexRemapper
  *
  **************************************************************************************************************************************************************/
@@ -140,16 +89,6 @@ private:
   // Assigned as necessary during the remapping operation.
   uint32_t first_doc_id_in_index_;   // The first docID in the remapped index.
   uint32_t last_doc_id_in_index_;    // The last docID in the remapped index.
-};
-
-/**************************************************************************************************************************************************************
- * IndexEntryDocIdComparison
- *
- **************************************************************************************************************************************************************/
-struct IndexEntryDocIdComparison {
-  bool operator()(const IndexEntry& lhs, const IndexEntry& rhs) const {
-    return lhs.doc_id < rhs.doc_id;
-  }
 };
 
 #endif /* INDEX_REMAPPER_H_ */

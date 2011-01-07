@@ -76,7 +76,7 @@ IndexRemapper::IndexRemapper(const IndexFiles& input_index_files, const string& 
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, input_index_files.lexicon_filename().c_str(),
-                                              input_index_files.document_map_filename().c_str(), input_index_files.meta_info_filename().c_str());
+                                              input_index_files.document_map_filename().c_str(), input_index_files.meta_info_filename().c_str(), true);
 
   // Coding policy for the remapped index remains the same as that of the original index.
   coding_policy_helper::LoadPolicyAndCheck(doc_id_compressor_, index_reader->meta_info().GetValue(meta_properties::kIndexDocIdCoding), "docID");
@@ -215,6 +215,10 @@ void IndexRemapper::Remap() {
 
   GetDefaultLogger().Log("Finished remapping.", false);
 
+  delete[] index_entry_buffer;
+  // TODO: Would be a good idea to delete the positions pool right here, before starting the merge.
+  //       'positions_pool' would need to be a pointer in this case (or provide a method to explicitly deallocate the memory).
+
   // Now merge the remapped files.
   const bool kDeleteIntermediateRemappedFiles = (Configuration::GetConfiguration().GetValue(config_properties::kDeleteIntermediateRemappedFiles) == "true") ? true : false;
   CollectionMerger collection_merger = CollectionMerger(remapped_indices_, final_output_index_files_, kDeleteIntermediateRemappedFiles);
@@ -327,6 +331,9 @@ void IndexRemapper::WriteMetaFile(const std::string& meta_filename) {
   index_metafile.AddKeyValuePair(meta_properties::kIndexFrequencyCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexFrequencyCoding), false));
   index_metafile.AddKeyValuePair(meta_properties::kIndexPositionCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexPositionCoding), false));
   index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexBlockHeaderCoding), false));
+
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumChunks, Stringify(index_builder_->total_num_chunks()));
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumPerTermBlocks, Stringify(index_builder_->total_num_per_term_blocks()));
 
   // TODO: These would only really apply to the final remapped index. They aren't necessary in the intermediate indices.
   index_metafile.AddKeyValuePair(meta_properties::kTotalDocumentLengths, Stringify(total_document_lengths_));
