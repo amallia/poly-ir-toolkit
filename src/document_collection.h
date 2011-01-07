@@ -156,6 +156,8 @@ class CollectionIndexer : public IndexCollection {
 public:
   CollectionIndexer();
   ~CollectionIndexer();
+
+  Parser<IndexingParserCallback>::DocType GetAndVerifyDocType();
   void ParseTrec();
   void OutputDocumentCollectionDocIdRanges(const char* filename);
 
@@ -183,6 +185,8 @@ class CollectionUrlExtractor : public IndexCollection {
 public:
   CollectionUrlExtractor();
   ~CollectionUrlExtractor();
+
+  Parser<DocUrlRetrievalParserCallback>::DocType GetAndVerifyDocType();
   void ParseTrec(const char* document_urls_filename);
 
 private:

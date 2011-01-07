@@ -97,13 +97,25 @@ void IndexCollection::ProcessDocumentCollections(istream& is) {
 CollectionIndexer::CollectionIndexer() :
   document_collection_buffer_size_(atol(Configuration::GetConfiguration().GetValue(config_properties::kDocumentCollectionBufferSize).c_str())),
       document_collection_buffer_(new char[document_collection_buffer_size_]), parser_callback_(&GetPostingCollectionController()),
-      parser_(Parser<IndexingParserCallback>::kManyDoc, Parser<IndexingParserCallback>::kTrec, &parser_callback_), doc_id_(0), avg_doc_length_(0) {
+      parser_(Parser<IndexingParserCallback>::kManyDoc, GetAndVerifyDocType(), &parser_callback_), doc_id_(0), avg_doc_length_(0) {
   if (document_collection_buffer_size_ == 0)
     GetErrorLogger().Log("Check configuration setting for '" + string(config_properties::kDocumentCollectionBufferSize) + "'.", true);
 }
 
 CollectionIndexer::~CollectionIndexer() {
   delete[] document_collection_buffer_;
+}
+
+Parser<IndexingParserCallback>::DocType CollectionIndexer::GetAndVerifyDocType() {
+  string document_collection_format =
+      Configuration::GetResultValue(Configuration::GetConfiguration().GetStringValue(config_properties::kDocumentCollectionFormat));
+
+  Parser<IndexingParserCallback>::DocType doc_type = Parser<IndexingParserCallback>::GetDocumentCollectionFormat(document_collection_format.c_str());
+  if (doc_type == Parser<IndexingParserCallback>::kNoSuchDocType) {
+    Configuration::ErroneousValue(config_properties::kDocumentCollectionFormat, document_collection_format);
+  }
+
+  return doc_type;
 }
 
 void CollectionIndexer::ParseTrec() {
@@ -148,13 +160,25 @@ void CollectionIndexer::OutputDocumentCollectionDocIdRanges(const char* filename
 CollectionUrlExtractor::CollectionUrlExtractor() :
   document_collection_buffer_size_(atol(Configuration::GetConfiguration().GetValue(config_properties::kDocumentCollectionBufferSize).c_str())),
       document_collection_buffer_(new char[document_collection_buffer_size_]),
-      parser_(Parser<DocUrlRetrievalParserCallback>::kManyDoc, Parser<DocUrlRetrievalParserCallback>::kTrec, &parser_callback_), doc_id_(0), avg_doc_length_(0) {
+      parser_(Parser<DocUrlRetrievalParserCallback>::kManyDoc, GetAndVerifyDocType(), &parser_callback_), doc_id_(0), avg_doc_length_(0) {
   if (document_collection_buffer_size_ == 0)
     GetErrorLogger().Log("Check configuration setting for '" + string(config_properties::kDocumentCollectionBufferSize) + "'.", true);
 }
 
 CollectionUrlExtractor::~CollectionUrlExtractor() {
   delete[] document_collection_buffer_;
+}
+
+Parser<DocUrlRetrievalParserCallback>::DocType CollectionUrlExtractor::GetAndVerifyDocType() {
+  string document_collection_format =
+      Configuration::GetResultValue(Configuration::GetConfiguration().GetStringValue(config_properties::kDocumentCollectionFormat));
+
+  Parser<DocUrlRetrievalParserCallback>::DocType doc_type = Parser<DocUrlRetrievalParserCallback>::GetDocumentCollectionFormat(document_collection_format.c_str());
+  if (doc_type == Parser<DocUrlRetrievalParserCallback>::kNoSuchDocType) {
+    Configuration::ErroneousValue(config_properties::kDocumentCollectionFormat, document_collection_format);
+  }
+
+  return doc_type;
 }
 
 void CollectionUrlExtractor::ParseTrec(const char* document_urls_filename) {
