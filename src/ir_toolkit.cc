@@ -41,12 +41,28 @@
 //       Choose merge degree so that we can merge in as few passes as possible, and so that every pass merges approximately the same amount of indices.
 //       I suspect this would result in better processor cache usage, since heaps will be smaller, and less buffers.
 //
+// Minor Improvements:
+// TODO: While doing merging, set the optimized flag that it's a single term query.
+// TODO: If you can't merge files, don't exit, but return an error code, and print a warning message.
+// TODO: During query processing, if we request more blocks than there are in the index, an assertion should be activated. Might want to check this...
+// TODO: Check what happens when passing an empty index (an empty file) to query, merge, etc...
+// TODO: When the cache is full and you have a cache miss, it might be wise to evict a bunch of blocks (30% in one paper) to amortize the eviction cost.
+//
 // Low Priority:
 // TODO: Detect whether a document collection is gzipped or not and automatically uncompress it or just load it into memory.
 // TODO: Might want to limit the number of index files per directory by placing them in numbered directories.
 // TODO: What about doing an in-place merge? Since we already use 64KB blocks, it might be helpful.
 // TODO: Might be a good idea to build separate binaries for indexing, querying, merging, cat, diff, etc. This way is cleaner because we don't need to
 //       initialize static variables that we won't use in a particular mode.
+// TODO: It would be good to support layered indices in all our index operations (aside from just querying).
+// TODO: Include the option to use a stop list during indexing (and query time).
+// TODO: Would be neat to have an index split class, that would take an index and break it down into manageable pieces; these can then be used for other
+//       I/O efficient operations --- such as merge, layer, etc.
+// TODO: Allow use of document mapping file during indexing and/or merging stages.
+//
+// Notes:
+// The BM25 formula used here modifies the IDF component to always be positive, by adding 1 to the log() function. I found that this is especially necessary
+// during the implementation of the TAAT with early termination query processing mode.
 //==============================================================================================================================================================
 
 #include "ir_toolkit.h"
@@ -71,6 +87,8 @@
 #include <libgen.h>
 #include <signal.h>
 
+#include <xmmintrin.h>
+
 #include "cache_manager.h"
 #include "config_file_properties.h"
 #include "configuration.h"
@@ -78,6 +96,7 @@
 #include "globals.h"
 #include "index_cat.h"
 #include "index_diff.h"
+#include "index_layerify.h"
 #include "index_merge.h"
 #include "index_reader.h"
 #include "index_remapper.h"
@@ -90,18 +109,34 @@ using namespace std;
 
 struct CommandLineArgs {
   CommandLineArgs() :
-    mode(kNoIdea), index1_filename("index.idx"), lexicon1_filename("index.lex"), doc_map1_filename("index.dmap"), meta_info1_filename("index.meta"),
-        index2_filename("index.idx"), lexicon2_filename("index.lex"), doc_map2_filename("index.dmap"), meta_info2_filename("index.meta"), merge_degree(0),
-        term(NULL), term_len(0), in_memory_index(false), doc_mapping_file(NULL), query_mode(QueryProcessor::kInteractive) {
+    mode(kNoIdea),
+    index1_filename("index.idx"),
+    lexicon1_filename("index.lex"),
+    doc_map1_filename("index.dmap"),
+    meta_info1_filename("index.meta"),
+    index2_filename("index.idx"),
+    lexicon2_filename("index.lex"),
+    doc_map2_filename("index.dmap"),
+    meta_info2_filename("index.meta"),
+    merge_degree(0),
+    term(NULL),
+    term_len(0),
+    in_memory_index(false),
+    doc_mapping_file(NULL),
+    query_stop_words_list_file(NULL),
+    query_algorithm(QueryProcessor::kDefault),
+    query_mode(QueryProcessor::kInteractive),
+    result_format(QueryProcessor::kNormal) {
   }
 
   ~CommandLineArgs() {
     delete[] term;
     delete[] doc_mapping_file;
+    delete[] query_stop_words_list_file;
   }
 
   enum Mode {
-    kIndex, kMergeInitial, kMergeInput, kQuery, kRemap, kCat, kDiff, kRetrieveIndexData, kLoopOverIndexData, kNoIdea
+    kIndex, kMergeInitial, kMergeInput, kQuery, kRemap, kLayerify, kCat, kDiff, kRetrieveIndexData, kLoopOverIndexData, kNoIdea
   };
 
   Mode mode;
@@ -121,10 +156,15 @@ struct CommandLineArgs {
   int term_len;
 
   bool in_memory_index;
+  bool memory_mapped_index;
 
   char* doc_mapping_file;
 
-  QueryProcessor::QueryFormat query_mode;
+  char* query_stop_words_list_file;
+
+  QueryProcessor::QueryAlgorithm query_algorithm;
+  QueryProcessor::QueryMode query_mode;
+  QueryProcessor::ResultFormat result_format;
 };
 static CommandLineArgs command_line_args;
 
@@ -136,7 +176,7 @@ CollectionIndexer& GetCollectionIndexer() {
 }
 
 void SignalHandlerIndex(int sig) {
-  GetDefaultLogger().Log("Received termination request. Cleaning up now...", false);
+/*  GetDefaultLogger().Log("Received termination request. Cleaning up now...", false);
 
   CollectionIndexer& collection_indexer = GetCollectionIndexer();
   collection_indexer.OutputDocumentCollectionDocIdRanges(document_collections_doc_id_ranges_filename);
@@ -144,7 +184,7 @@ void SignalHandlerIndex(int sig) {
   PostingCollectionController& posting_collection_controller = GetPostingCollectionController();
   // FIXME: It's possible that the parser callback will call this simultaneously as we're cleaning up.
   //        Set some special variable in class that's feeding the parser to indicate it to finish up.
-  posting_collection_controller.Finish();
+  posting_collection_controller.Finish();*/
 
   exit(0);
 }
@@ -179,12 +219,13 @@ void Init() {
 }
 
 void Query(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-           QueryProcessor::QueryFormat query_mode) {
-  GetDefaultLogger().Log("Starting query processor with index file '" + Stringify(index_filename) + "', " + "lexicon file '"
-      + Stringify(lexicon_filename) + "', " + "document map file '" + Stringify(doc_map_filename) + "', and " + "meta file '"
-      + Stringify(meta_info_filename) + "'.", false);
+           const char* stop_words_list_filename, QueryProcessor::QueryAlgorithm query_algorithm, QueryProcessor::QueryMode query_mode,
+           QueryProcessor::ResultFormat result_format) {
+  GetDefaultLogger().Log("Starting query processor with index file '" + Stringify(index_filename) + "', " + "lexicon file '" + Stringify(lexicon_filename)
+      + "', " + "document map file '" + Stringify(doc_map_filename) + "', and " + "meta file '" + Stringify(meta_info_filename) + "'.", false);
 
-  QueryProcessor query_processor(index_filename, lexicon_filename, doc_map_filename, meta_info_filename, query_mode);
+  QueryProcessor query_processor(index_filename, lexicon_filename, doc_map_filename, meta_info_filename, stop_words_list_filename, query_algorithm, query_mode,
+                                 result_format);
 }
 
 void IndexCollection() {
@@ -368,7 +409,7 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
                        const char* term, int term_len) {
   CacheManager* cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, lexicon_filename, doc_map_filename,
-                                              meta_info_filename);
+                                              meta_info_filename, true);
 
   // Need to read through the lexicon until we reach the term we want.
   LexiconData* lex_data;
@@ -392,7 +433,7 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
   int index_data_size = kInitialIndexDataSize;
   uint32_t* index_data = new uint32_t[index_data_size];
 
-  ListData* list_data = index_reader->OpenList(*lex_data);
+  ListData* list_data = index_reader->OpenList(*lex_data, 0);
 
   int num_elements_stored;
   int element_offset = 0;
@@ -445,15 +486,17 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
 // Loops over certain index data (docIDs, frequencies, or positions). Useful for testing decompression speed. Has option for loading the index completely into
 // main memory before testing, or reading it from disk while traversing it.
 void LoopOverIndexData(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                       const char* term, int term_len, bool in_memory_index) {
+                       const char* term, int term_len, bool in_memory_index, bool memory_mapped_index) {
   CacheManager* cache_policy;
-  if (in_memory_index)
+  if (memory_mapped_index)
+    cache_policy = new MemoryMappedCachePolicy(index_filename);  // Memory maps the index.
+  else if (in_memory_index)
     cache_policy = new FullContiguousCachePolicy(index_filename);  // Loads the index fully into main memory.
   else
     cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
 
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, lexicon_filename, doc_map_filename,
-                                              meta_info_filename);
+                                              meta_info_filename, true);
 
   // Need to read through the lexicon until we reach the term we want.
   LexiconData* lex_data;
@@ -471,7 +514,7 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
   // What type of data we want to retrieve from the inverted list.
   IndexReader::IndexDataType data_type = IndexReader::kDocId;  // Decode only the docIDs.
 
-  ListData* list_data = index_reader->OpenList(*lex_data);
+  ListData* list_data = index_reader->OpenList(*lex_data, 0);
 
   Timer timer;
   int num_elements_retrieved = index_reader->LoopOverList(list_data, data_type);
@@ -494,6 +537,12 @@ void RemapIndexDocIds(const char* index_filename, const char* lexicon_filename, 
   index_remapper.Remap();
 }
 
+void LayerifyIndex(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename) {
+  LayeredIndexGenerator layered_index_generator = LayeredIndexGenerator(IndexFiles(index_filename, lexicon_filename, doc_map_filename, meta_info_filename),
+                                                                        "index_layered");
+  layered_index_generator.CreateLayeredIndex();
+}
+
 void GenerateUrlSortedDocIdMappingFile() {
   GetDefaultLogger().Log("Generating URL sorted docID mapping file...", false);
 
@@ -503,6 +552,45 @@ void GenerateUrlSortedDocIdMappingFile() {
   Timer url_extraction_time;
   collection_url_extractor.ParseTrec("url_sorted_doc_id_mapping");
   GetDefaultLogger().Log("Time Elapsed: " + Stringify(url_extraction_time.GetElapsedTime()), false);
+}
+
+void SetConfigurationOption(string key_value) {
+  size_t eq = key_value.find('=');
+  if (eq != string::npos) {
+    string key = key_value.substr(0, eq);
+    string value = key_value.substr(eq + 1);
+    bool override = Configuration::GetConfiguration().SetKeyValue(key, value);
+    cout << key << " = " << value << (override ? " (override)" : " (add)") << endl;
+  }
+}
+
+// Overrides the options set in the configuration file or adds new options to the configuration as specified on the command line.
+// Syntax for 'options': key1=value1;key2=value2;
+// Note that each key/value pair must end with a semicolon, except the last pair, which is optional for convenience.
+// When entering on the command line, the semicolon char ';' is considered a special character by the shell and so
+// must be escaped by prepending a '\' character in front.
+// Example:
+// $ ./irtk --index --config-options=document_collection_format=trec\;include_positions=false\;new_option=1
+void OverrideConfigurationOptions(const string& options) {
+  cout << "Overriding the following configuration file options: " << endl;
+
+  size_t option_start = 0;
+  size_t option_end = 0;
+  size_t last_option_start = 0;
+
+  while ((option_end = options.find(';', option_start)) != string::npos) {
+    string key_value = options.substr(option_start, (option_end - option_start));
+    ++option_end;
+    option_start = option_end;
+    last_option_start = option_start;
+    SetConfigurationOption(key_value);
+  }
+
+  // The only option specified or the last option specified didn't end with a semicolon.
+  if (option_start == 0 || option_start != options.size()) {
+    string key_value = options.substr(last_option_start);
+    SetConfigurationOption(key_value);
+  }
 }
 
 // Displays usage information.
@@ -534,26 +622,211 @@ void UnrecognizedOptionValue(const char* option_name, const char* option_value) 
   cout << "Option '" << string(option_name) << "' has an unrecognized value of '" << string(option_value) << "'" << endl;
 }
 
+// Assume we can load the whole file into main memory.
+void LoopThroughLexicon(const char* lexicon_filename) {
+  int lexicon_fd = open(lexicon_filename, O_RDONLY);
+  if (lexicon_fd < 0) {
+    GetErrorLogger().LogErrno("open() in LoopThroughLexicon()", errno, true);
+  }
+
+  struct stat stat_buf;
+  if (fstat(lexicon_fd, &stat_buf) < 0) {
+    GetErrorLogger().LogErrno("fstat() in LoopThroughLexicon()", errno, true);
+  }
+  off_t lexicon_file_size = stat_buf.st_size;
+
+  char* lexicon_buffer = new char[lexicon_file_size];
+  ssize_t read_ret;
+  off_t bytes_read = 0;
+  while ((read_ret = read(lexicon_fd, lexicon_buffer + bytes_read, lexicon_file_size)) > 0) {
+    bytes_read += read_ret;
+  }
+  if (bytes_read == -1) {
+    GetErrorLogger().LogErrno("read() in LoopThroughLexicon(), trying to read lexicon", errno, true);
+  }
+  assert(bytes_read == lexicon_file_size);
+
+  off_t num_bytes_read = 0;
+  char* lexicon_buffer_ptr_ = lexicon_buffer;
+  while (num_bytes_read != lexicon_file_size) {
+    assert(num_bytes_read <= lexicon_file_size);
+
+    // num_layers
+    int num_layers;
+    int num_layers_bytes = sizeof(num_layers);
+    memcpy(&num_layers, lexicon_buffer_ptr_, num_layers_bytes);
+    lexicon_buffer_ptr_ += num_layers_bytes;
+    num_bytes_read += num_layers_bytes;
+
+    // term_len
+    int term_len;
+    int term_len_bytes = sizeof(term_len);
+    memcpy(&term_len, lexicon_buffer_ptr_, term_len_bytes);
+    lexicon_buffer_ptr_ += term_len_bytes;
+    num_bytes_read += term_len_bytes;
+
+    // term
+    char* term = lexicon_buffer_ptr_;
+    int term_bytes = term_len;
+    lexicon_buffer_ptr_ += term_bytes;
+    num_bytes_read += term_bytes;
+
+    // num_docs
+    int* num_docs = reinterpret_cast<int*> (lexicon_buffer_ptr_);
+    int num_docs_bytes = num_layers * sizeof(*num_docs);
+    lexicon_buffer_ptr_ += num_docs_bytes;
+    num_bytes_read += num_docs_bytes;
+
+    // num_chunks
+    int* num_chunks = reinterpret_cast<int*> (lexicon_buffer_ptr_);
+    int num_chunks_bytes = num_layers * sizeof(*num_chunks);
+    lexicon_buffer_ptr_ += num_chunks_bytes;
+    num_bytes_read += num_chunks_bytes;
+
+    // num_chunks_last_block
+    int* num_chunks_last_block = reinterpret_cast<int*> (lexicon_buffer_ptr_);
+    int num_chunks_last_block_bytes = num_layers * sizeof(*num_chunks_last_block);
+    lexicon_buffer_ptr_ += num_chunks_last_block_bytes;
+    num_bytes_read += num_chunks_last_block_bytes;
+
+    // num_blocks
+    int* num_blocks = reinterpret_cast<int*> (lexicon_buffer_ptr_);
+    int num_blocks_bytes = num_layers * sizeof(*num_blocks);
+    lexicon_buffer_ptr_ += num_blocks_bytes;
+    num_bytes_read += num_blocks_bytes;
+
+    // block_number
+    int* block_numbers = reinterpret_cast<int*> (lexicon_buffer_ptr_);
+    int block_numbers_bytes = num_layers * sizeof(*block_numbers);
+    lexicon_buffer_ptr_ += block_numbers_bytes;
+    num_bytes_read += block_numbers_bytes;
+
+    // chunk_number
+    int* chunk_numbers = reinterpret_cast<int*> (lexicon_buffer_ptr_);
+    int chunk_numbers_bytes = num_layers * sizeof(*chunk_numbers);
+    lexicon_buffer_ptr_ += chunk_numbers_bytes;
+    num_bytes_read += chunk_numbers_bytes;
+
+    // score_thresholds
+    float* score_thresholds = reinterpret_cast<float*> (lexicon_buffer_ptr_);
+    int score_thresholds_bytes = num_layers * sizeof(*score_thresholds);
+    lexicon_buffer_ptr_ += score_thresholds_bytes;
+    num_bytes_read += score_thresholds_bytes;
+
+    cout << string(term, term_len) << endl;
+  }
+}
+
+void ReadDocumentUrls() {
+  int fd = open("index.dmap_urls", O_RDONLY);
+
+  int read_ret;
+  int url_len;
+  char* url;
+
+  int count = 0;
+  while (true) {
+    read_ret = read(fd, &url_len, sizeof(int));
+    if (read_ret <= 0) {
+      cout << "read ret: " << read_ret << endl;
+      break;
+    }
+
+    url = new char[url_len];
+    read_ret = read(fd, url, url_len);
+    assert(read_ret > 0);
+
+    cout << string(url, url_len) << endl;
+    ++count;
+
+    delete[] url;
+  }
+
+  cout << "Total # urls: " << count << endl;
+}
+
+// Case that demonstrates than addition order matters in floating point ops (the assertion fails).
+void FloatingPointTest() {
+  float a, b, c;
+  a = -0.420604676;
+  b = -0.2024171948;
+  c = -0.2698420882;
+  float sum1 = a + b + c;
+  float sum2 = c + b + a;
+  float sum3 = b + c + a;
+
+  assert(sum1 == sum2 && sum1 == sum3 && sum2 == sum3);
+}
+
+void SimdTest() {
+  float test[2][4] = {{1,2,3,4},{5,6,7,8}};
+
+  cout << "test: " << test << endl;
+  cout << "TEST[0]: " << test[0] << ", " << *test[0]<<  endl;
+  cout << "TEST[1]: " << test[1] << ", " << *test[1]<<  endl;
+
+  float a = 1.5;
+  float b = 2.1;
+  float vec[] = { 1, 2, 3, 4 };
+
+//  assert(__alignof__(vec) % 16 == 0);
+
+  cout << "__alignof__(vec): " << __alignof__(vec) << endl;
+
+  __m128 SSEa = _mm_load1_ps(&a);
+  __m128 SSEb = _mm_load1_ps(&b);
+  __m128 v = _mm_load_ps(vec);
+  v = _mm_add_ps(_mm_mul_ps(v, SSEa), SSEb);
+  _mm_store_ps(vec, v);
+
+  cout << "vec alignment: " << (long int) vec % 16 << ", " << vec << endl;
+
+  for (int i = 0; i < 4; ++i) {
+    cout << "RESULT " << i << ": " << vec[i] << endl;
+  }
+}
+
+/*
+ * TODO: Ideas for parallelizing indexing for ClueWeb:
+ *       Have command line options to specify number of processes we want and fork off several IRTK processes -- and we can supply the proper command line args
+ *       each process creates a unique folder for outputting index files -- perhaps using the pid for the folder name
+ *       The parent that sets this up can simply split the files to index for each process and pipe them into each child (I/O redirection) and then die.
+ *       Child (or maybe the parent) creates the folder for the index.
+ *       Things like merging can be done independently on each folder, and then we can supply a custom merge input -- to do the final merge.
+ *
+ */
+
+/*
+ * TODO: In clueweb sample file indexing --- need to fix bug --- where chunk properties upperbound fails
+ * This is because we index without positions --- but to determine the upperbound we need to know the min size of a chunk --- but we assume it includes positions --- so we need to adjust it
+ * for when we have no positions.
+ */
 int main(int argc, char** argv) {
   const char* opt_string = "iqcdh";
-  const struct option long_opts[] = { { "index", no_argument, NULL, 'i' },
-                                      { "merge", required_argument, NULL, 0 },
-                                      { "merge-degree", required_argument, NULL, 0 },
-                                      { "query", no_argument, NULL, 'q' },
-                                      { "query-mode", required_argument, NULL, 0 },
-                                      { "cat", no_argument, NULL, 'c' },
-                                      { "cat-term", required_argument, NULL, 0 },
-                                      { "diff", no_argument, NULL, 'd' },
-                                      { "diff-term", required_argument, NULL, 0 },
-                                      { "remap", no_argument, NULL, 0 },
-                                      { "retrieve-index-data", required_argument, NULL, 0 },
-                                      { "loop-over-index-data", required_argument, NULL, 0 },
-                                      { "in-memory-index", no_argument, NULL, 0 },
-                                      { "doc-mapping-file", required_argument, NULL, 0 },
-                                      { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },
-                                      { "test-compression", no_argument, NULL, 0 },
-                                      { "test-coder", required_argument, NULL, 0 },
-                                      { "help", no_argument, NULL, 'h' },
+  const struct option long_opts[] = { { "index", no_argument, NULL, 'i' },                                // Index the document collection bundles.
+                                      { "merge", required_argument, NULL, 0 },                            // Merge the indices (depends on argument).
+                                      { "merge-degree", required_argument, NULL, 0 },                     // Override the default merge degree.
+                                      { "query", no_argument, NULL, 'q' },                                // Query an index.
+                                      { "query-algorithm", required_argument, NULL, 0 },                  // Set which query algorithm we want to use.
+                                      { "query-mode", required_argument, NULL, 0 },                       // Set which query mode we want to use.
+                                      { "query-stop-list-file", required_argument, NULL, 0 },             // Use the following stop word list at query time.
+                                      { "result-format", required_argument, NULL, 0 },                    // Set which result format we want to use.
+                                      { "cat", no_argument, NULL, 'c' },                                  // Outputs inverted list data in a human readable format.
+                                      { "cat-term", required_argument, NULL, 0 },                         // Specify the inverted list (term) on which we want to run the cat procedure.
+                                      { "diff", no_argument, NULL, 'd' },                                 // Outputs the differences between two inverted lists.
+                                      { "diff-term", required_argument, NULL, 0 },                        // Specify the inverted list (term) on which we want to run the diff procedure.
+                                      { "remap", no_argument, NULL, 0 },                                  // Remaps an index.
+                                      { "layerify", no_argument, NULL, 0 },                               // Creates a layered index.
+                                      { "retrieve-index-data", required_argument, NULL, 0 },              // Retrieves index data for an inverted list into an in-memory array. See function 'RetrieveIndexData()'.
+                                      { "loop-over-index-data", required_argument, NULL, 0 },             // Loops over an inverted list (decompresses but does not do any top-k). Useful for benchmarking decompression coders.
+                                      { "in-memory-index", no_argument, NULL, 0 },                        // Loads the index into main memory.
+                                      { "memory-map-index", no_argument, NULL, 0 },                       // Memory maps the index into our address space.
+                                      { "doc-mapping-file", required_argument, NULL, 0 },                 // Specify the document mapping file to use for the remap procedure.
+                                      { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },  // Generates a docID mapping file (docIDs are remapped by URL) that can be used as input to the remap procedure.
+                                      { "config-options", required_argument, NULL, 0 },                   // Overrides/adds options defined in the configuration file.
+                                      { "test-compression", no_argument, NULL, 0 },                       // Runs compression tests on some randomly generated data.
+                                      { "test-coder", required_argument, NULL, 0 },                       // Tests a specific coder.
+                                      { "help", no_argument, NULL, 'h' },                                 // Help.
                                       { NULL, no_argument, NULL, 0 } };
 
   int opt, long_index;
@@ -594,6 +867,31 @@ int main(int argc, char** argv) {
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("merge-degree", long_opts[long_index].name) == 0) {
           command_line_args.merge_degree = atoi(optarg);
+        } else if (strcmp("query-algorithm", long_opts[long_index].name) == 0) {
+          if (strcmp("default", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDefault;
+          else if (strcmp("daat-and", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDaatAnd;
+          else if (strcmp("daat-or", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDaatOr;
+          else if (strcmp("taat-or", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kTaatOr;
+          else if (strcmp("dual-layered-overlapping-daat", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDualLayeredOverlappingDaat;
+          else if (strcmp("dual-layered-overlapping-merge-daat", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDualLayeredOverlappingMergeDaat;
+          else if (strcmp("layered-taat-or-early-terminated", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kLayeredTaatOrEarlyTerminated;
+          else if (strcmp("wand", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kWand;
+          else if (strcmp("dual-layered-wand", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDualLayeredWand;
+          else if (strcmp("max-score", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kMaxScore;
+          else if (strcmp("dual-layered-max-score", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDualLayeredMaxScore;
+          else
+            UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("query-mode", long_opts[long_index].name) == 0) {
           if (strcmp("interactive", optarg) == 0)
             command_line_args.query_mode = QueryProcessor::kInteractive;
@@ -601,10 +899,26 @@ int main(int argc, char** argv) {
             command_line_args.query_mode = QueryProcessor::kInteractiveSingle;
           else if (strcmp("batch", optarg) == 0)
             command_line_args.query_mode = QueryProcessor::kBatch;
+          else if (strcmp("batch-all", optarg) == 0)
+            command_line_args.query_mode = QueryProcessor::kBatchAll;
+          else
+            UnrecognizedOptionValue(long_opts[long_index].name, optarg);
+        } else if (strcmp("query-stop-list-file", long_opts[long_index].name) == 0) {
+          command_line_args.query_stop_words_list_file = new char[strlen(optarg)];
+          memcpy(command_line_args.query_stop_words_list_file, optarg, strlen(optarg));
+        } else if (strcmp("result-format", long_opts[long_index].name) == 0) {
+          if (strcmp("trec", optarg) == 0)
+            command_line_args.result_format = QueryProcessor::kTrec;
+          else if (strcmp("compare", optarg) == 0)
+            command_line_args.result_format = QueryProcessor::kCompare;
+          else if (strcmp("discard", optarg) == 0)
+            command_line_args.result_format = QueryProcessor::kDiscard;
           else
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("remap", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kRemap;
+        } else if (strcmp("layerify", long_opts[long_index].name) == 0) {
+          command_line_args.mode = CommandLineArgs::kLayerify;
         } else if (strcmp("cat-term", long_opts[long_index].name) == 0 || strcmp("diff-term", long_opts[long_index].name) == 0) {
           command_line_args.term_len = strlen(optarg);
           command_line_args.term = new char[command_line_args.term_len];
@@ -621,13 +935,18 @@ int main(int argc, char** argv) {
           memcpy(command_line_args.term, optarg, command_line_args.term_len);
         } else if (strcmp("in-memory-index", long_opts[long_index].name) == 0) {
           command_line_args.in_memory_index = true;
+          SetConfigurationOption(string(config_properties::kMemoryResidentIndex) + string("=true"));
+        } else if (strcmp("memory-map-index", long_opts[long_index].name) == 0) {
+          command_line_args.memory_mapped_index = true;
+          SetConfigurationOption(string(config_properties::kMemoryMappedIndex) + string("=true"));
         } else if (strcmp("doc-mapping-file", long_opts[long_index].name) == 0) {
           command_line_args.doc_mapping_file = new char[strlen(optarg)];
           memcpy(command_line_args.doc_mapping_file, optarg, strlen(optarg));
-          // TODO: Should be able to use the docID mapping file during indexing and merging.
         } else if (strcmp("generate-url-sorted-doc-mapping", long_opts[long_index].name) == 0) {
           GenerateUrlSortedDocIdMappingFile();
           return EXIT_SUCCESS;
+        } else if (strcmp("config-options", long_opts[long_index].name) == 0) {
+          OverrideConfigurationOptions(optarg);
         } else if (strcmp("test-compression", long_opts[long_index].name) == 0) {
           TestCompression();
           return EXIT_SUCCESS;
@@ -646,8 +965,13 @@ int main(int argc, char** argv) {
   char** input_files = argv + optind;
   int num_input_files = argc - optind;
 
-  if (command_line_args.mode == CommandLineArgs::kQuery || command_line_args.mode == CommandLineArgs::kCat || command_line_args.mode == CommandLineArgs::kDiff
-      || command_line_args.mode == CommandLineArgs::kRetrieveIndexData || command_line_args.mode == CommandLineArgs::kLoopOverIndexData) {
+  if (command_line_args.mode == CommandLineArgs::kQuery ||
+      command_line_args.mode == CommandLineArgs::kCat ||
+      command_line_args.mode == CommandLineArgs::kDiff ||
+      command_line_args.mode == CommandLineArgs::kRetrieveIndexData ||
+      command_line_args.mode == CommandLineArgs::kLoopOverIndexData ||
+      command_line_args.mode == CommandLineArgs::kLayerify ||
+      command_line_args.mode == CommandLineArgs::kRemap) {
     for (int i = 0; i < num_input_files; ++i) {
       switch (i) {
         // Index files for the first index.
@@ -689,7 +1013,7 @@ int main(int argc, char** argv) {
       break;
     case CommandLineArgs::kQuery:
       Query(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-            command_line_args.query_mode);
+            command_line_args.query_stop_words_list_file, command_line_args.query_algorithm, command_line_args.query_mode, command_line_args.result_format);
       break;
     case CommandLineArgs::kMergeInitial:
       MergeInitial(command_line_args.merge_degree);
@@ -698,7 +1022,12 @@ int main(int argc, char** argv) {
       MergeInput();
       break;
     case CommandLineArgs::kRemap:
-      RemapIndexDocIds(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename);
+      RemapIndexDocIds(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
+                       command_line_args.meta_info1_filename);
+      break;
+    case CommandLineArgs::kLayerify:
+      LayerifyIndex(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
+                    command_line_args.meta_info1_filename);
       break;
     case CommandLineArgs::kCat:
       Cat(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
@@ -710,12 +1039,13 @@ int main(int argc, char** argv) {
            command_line_args.term, command_line_args.term_len);
       break;
     case CommandLineArgs::kRetrieveIndexData:
-      RetrieveIndexData(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-          command_line_args.term, command_line_args.term_len);
+      RetrieveIndexData(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
+                        command_line_args.meta_info1_filename, command_line_args.term, command_line_args.term_len);
       break;
     case CommandLineArgs::kLoopOverIndexData:
-      LoopOverIndexData(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-          command_line_args.term, command_line_args.term_len, command_line_args.in_memory_index);
+      LoopOverIndexData(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
+                        command_line_args.meta_info1_filename, command_line_args.term, command_line_args.term_len, command_line_args.in_memory_index,
+                        command_line_args.memory_mapped_index);
       break;
     default:
       Help();
