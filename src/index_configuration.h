@@ -44,6 +44,8 @@ class IndexConfiguration : public KeyValueStore {
 public:
   IndexConfiguration(const char* filename);
 
+  static void ErroneousValue(const std::string& key, const std::string& value);
+
   template<typename ValueT>
     static ValueT GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result, bool exit_on_error);
 

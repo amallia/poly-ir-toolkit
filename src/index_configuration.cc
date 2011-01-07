@@ -41,3 +41,7 @@ IndexConfiguration::IndexConfiguration(const char* filename) :
         + Stringify(status.line_num()), true);
   }
 }
+
+void IndexConfiguration::ErroneousValue(const string& key, const string& value) {
+  GetErrorLogger().Log("Key '" + key + "' has an erroneous configuration value of '" + value + "'. Check your index meta file.", true);
+}
