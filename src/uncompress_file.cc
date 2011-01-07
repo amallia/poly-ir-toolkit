@@ -129,7 +129,7 @@ void UncompressFile(const char* file_path, char** dest, int* dest_size, int* des
     GetErrorLogger().LogErrno("fstat() in UncompressFile()", errno, true);
   }
 
-  void *src;
+  void* src;
   if ((src = mmap(0, stat_buf.st_size, PROT_READ, MAP_SHARED, fd, 0)) == MAP_FAILED) {
     GetErrorLogger().LogErrno("mmap() in UncompressFile()", errno, true);
   }
