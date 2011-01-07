@@ -51,4 +51,7 @@
 // This is because all our coding methods use at least one word per integer encoded.
 #define MIN_COMPRESSED_CHUNK_SIZE (3 * sizeof(uint32_t))
 
+// Maximum number of layers that can be part of a single inverted list.
+#define MAX_LIST_LAYERS 8
+
 #endif /* INDEX_LAYOUT_PARAMETERS_H_ */
