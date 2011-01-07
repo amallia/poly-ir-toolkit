@@ -35,6 +35,7 @@
 #include <stdint.h>
 
 #include "coding_policy.h"
+#include "document_map.h"
 #include "term_hash_table.h"
 
 class PostingCollectionController;
@@ -364,6 +365,8 @@ public:
   ~PostingCollectionController();
   void Finish();
   void InsertPosting(const Posting& posting);
+  void SaveDocLength(int doc_length, uint32_t doc_id);
+  void SaveDocUrl(const char* url, int url_len, uint32_t doc_id);
 
   uint64_t posting_count() const {
     return posting_count_;
@@ -372,6 +375,13 @@ public:
 private:
   int index_count_;  // The current mini index we're working on building.
   PostingCollection* posting_collection_;  // The posting collection for the current mini index.
+
+  // TODO: Currently this will write the document map for the complete index.
+  //       We want a separate document map for each index slice.
+  //       We can have a separate method in the current PostingCollection that will be used to insert the document map entries.
+  //       Before dumping the current index slice, we can get the overflow document map entry and insert it into the new index slice instead.
+  //       Note: if we dump an index before we insert all the postings for it, we know the document map entry will go into the next index slice.
+  DocumentMapWriter document_map_writer_;
 
   uint64_t posting_count_;  // For statistics purposes. Counts the total number of postings in the collection.
 };

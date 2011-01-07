@@ -594,7 +594,7 @@ void MemoryPoolManager::Reset() {
  * TODO: When doing doc reordering, need to initialize starting docID in index to something other than 0. This is the parameter to PostingCollection().
  **************************************************************************************************************************************************************/
 PostingCollectionController::PostingCollectionController() :
-  index_count_(0), posting_collection_(new PostingCollection(index_count_, 0)), posting_count_(0) {
+  index_count_(0), posting_collection_(new PostingCollection(index_count_, 0)), document_map_writer_("index.dmap", "index.dmap_urls"), posting_count_(0) {
 }
 
 PostingCollectionController::~PostingCollectionController() {
@@ -631,6 +631,15 @@ void PostingCollectionController::InsertPosting(const Posting& posting) {
     delete posting_collection_;
     posting_collection_ = new_posting_collection;
   }
+}
+
+void PostingCollectionController::SaveDocLength(int doc_length, uint32_t doc_id) {
+  DocMapEntry doc_map_entry = {doc_length};
+  document_map_writer_.AddDocMapEntry(doc_map_entry);
+}
+
+void PostingCollectionController::SaveDocUrl(const char* url, int url_len, uint32_t doc_id) {
+  document_map_writer_.AddUrl(url, url_len);
 }
 
 /**************************************************************************************************************************************************************
@@ -861,6 +870,9 @@ void PostingCollection::WriteMetaFile(const IndexBuilder* index_builder, const s
   metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kIndexingBlockHeaderCoding);
   index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding, metafile_values.str());
   metafile_values.str("");
+
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumChunks, Stringify(index_builder->total_num_chunks()));
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumPerTermBlocks, Stringify(index_builder->total_num_per_term_blocks()));
 
   metafile_values << total_document_lengths_;
   index_metafile.AddKeyValuePair(meta_properties::kTotalDocumentLengths, metafile_values.str());
