@@ -31,6 +31,7 @@
 #ifndef INDEX_UTIL_H_
 #define INDEX_UTIL_H_
 
+#include <cassert>
 #include <cstring>
 #include <stdint.h>
 
@@ -134,7 +135,7 @@ private:
 /**************************************************************************************************************************************************************
  * IndexComparison
  *
- * Compares two indices based on their current term and current doc id being processed.
+ * Compares two indices based on their current term and current docID being processed.
  * Returns true if 'lhs' >= 'rhs', false otherwise.
  **************************************************************************************************************************************************************/
 struct IndexComparison {
@@ -169,6 +170,67 @@ struct IndexTermComparison {
     if (cmp == 0)
       return lhs->curr_term_len() > rhs->curr_term_len();
     return (cmp > 0) ? true : false;
+  }
+};
+
+/**************************************************************************************************************************************************************
+ * PositionsPool
+ *
+ **************************************************************************************************************************************************************/
+class PositionsPool {
+public:
+  PositionsPool() :
+    size_(0), curr_offset_(0), positions_(NULL) {
+  }
+
+  PositionsPool(int size) :
+    size_(size), curr_offset_(0), positions_(new uint32_t[size_]) {
+  }
+
+  ~PositionsPool() {
+    delete[] positions_;
+  }
+
+  uint32_t* StorePositions(const uint32_t* positions, int num_positions) {
+    assert(positions_ != NULL);
+
+    if (curr_offset_ + num_positions < size_) {
+      for (int i = 0; i < num_positions; ++i) {
+        positions_[curr_offset_ + i] = positions[i];
+      }
+      curr_offset_ += num_positions;
+      return positions_ + (curr_offset_ - num_positions);
+    }
+    return NULL;
+  }
+
+  void Reset() {
+    curr_offset_ = 0;
+  }
+
+private:
+  int size_;
+  int curr_offset_;
+  uint32_t* positions_;
+};
+
+/**************************************************************************************************************************************************************
+ * IndexEntry
+ *
+ **************************************************************************************************************************************************************/
+struct IndexEntry {
+  uint32_t doc_id;
+  uint32_t frequency;
+  uint32_t* positions;
+};
+
+/**************************************************************************************************************************************************************
+ * IndexEntryDocIdComparison
+ *
+ **************************************************************************************************************************************************************/
+struct IndexEntryDocIdComparison {
+  bool operator()(const IndexEntry& lhs, const IndexEntry& rhs) const {
+    return lhs.doc_id < rhs.doc_id;
   }
 };
 

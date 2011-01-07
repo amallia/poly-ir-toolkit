@@ -131,7 +131,7 @@ bool Index::NextTerm() {
   }
 
   if ((curr_lex_data_ = index_reader_->lexicon().GetNextEntry()) != NULL) {
-    curr_list_data_ = index_reader_->OpenList(*curr_lex_data_);
+    curr_list_data_ = index_reader_->OpenList(*curr_lex_data_, 0);
     curr_term_ = curr_lex_data_->term();
     curr_term_len_ = curr_lex_data_->term_len();
     return true;
