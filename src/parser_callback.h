@@ -79,6 +79,10 @@ public:
 
   void ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context);
 
+  void ProcessDocLength(int doc_length, uint32_t doc_id);
+
+  void ProcessUrl(const char* url, int url_len, uint32_t doc_id);
+
 private:
   PostingCollectionController* posting_collection_controller_;
 };
@@ -102,6 +106,15 @@ inline void IndexingParserCallback::ProcessTerm(const char* term, int term_len, 
 
   Posting posting(term, term_len, doc_id, position, context);
   posting_collection_controller_->InsertPosting(posting);
+}
+
+inline void IndexingParserCallback::ProcessDocLength(int doc_length, uint32_t doc_id) {
+  posting_collection_controller_->SaveDocLength(doc_length, doc_id);
+}
+
+inline void IndexingParserCallback::ProcessUrl(const char* url, int url_len, uint32_t doc_id) {
+  assert(url_len > 7);  // We strip away the 'http://' part.
+  posting_collection_controller_->SaveDocUrl(url + 7, url_len - 7, doc_id);
 }
 
 /**************************************************************************************************************************************************************
