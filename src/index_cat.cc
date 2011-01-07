@@ -47,7 +47,7 @@ IndexCat::IndexCat(const IndexFiles& index_files) :
   index_(NULL), includes_contexts_(true), includes_positions_(true) {
   CacheManager* cache_policy = new MergingCachePolicy(index_files.index_filename().c_str());
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, index_files.lexicon_filename().c_str(),
-                                              index_files.document_map_filename().c_str(), index_files.meta_info_filename().c_str());
+                                              index_files.document_map_filename().c_str(), index_files.meta_info_filename().c_str(), true);
 
   if (!index_reader->includes_contexts())
     includes_contexts_ = false;
