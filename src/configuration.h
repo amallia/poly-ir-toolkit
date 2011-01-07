@@ -41,7 +41,9 @@
 
 class Configuration : public KeyValueStore {
 public:
-  static const Configuration& GetConfiguration();
+  static Configuration& GetConfiguration();
+
+  static void ErroneousValue(const std::string& key, const std::string& value);
 
   template<typename ValueT>
     static ValueT GetResultValue(const KeyValueStore::KeyValueResult<ValueT>& key_value_result);

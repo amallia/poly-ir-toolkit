@@ -42,7 +42,11 @@ Configuration::Configuration(const char* filename) :
   }
 }
 
-const Configuration& Configuration::GetConfiguration() {
+void Configuration::ErroneousValue(const string& key, const string& value) {
+  GetErrorLogger().Log("Key '" + key + "' has an erroneous configuration value of '" + value + "'. Check your configuration file.", true);
+}
+
+Configuration& Configuration::GetConfiguration() {
   // Creates a single local static Configuration object to be used throughout the program.
   static Configuration config("irtk.conf");
   return config;
