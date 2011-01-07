@@ -35,9 +35,12 @@
 #include <cassert>
 #include <stdint.h>
 
+#include <iostream>//TODO
+
 #include "cache_manager.h"
 #include "coding_policy.h"
 #include "coding_policy_helper.h"
+#include "document_map.h"
 #include "index_configuration.h"
 #include "index_layout_parameters.h"
 #include "term_hash_table.h"
@@ -210,10 +213,21 @@ public:
     return curr_chunk_decoder_.decoded();
   }
 
+  // Returns the size of the block header in bytes.
+  // This also includes the number of chunks as part of the header.
+  int block_header_size() const {
+    return block_header_size_;
+  }
+
   // Returns the total number of chunks in this block.
   // This includes any chunks that are not part of the inverted list for this particular term.
   int num_chunks() const {
     return num_chunks_;
+  }
+
+  // Returns the maximum docID score contained within this block.
+  float block_max_score() const {
+    return block_max_score_;
   }
 
   // Returns the actual number of chunks stored in this block, that are actually part of the inverted list for this particular term.
@@ -256,7 +270,9 @@ private:
   uint32_t chunk_properties_[kChunkPropertiesDecompressedUpperbound];  // This will require ~11KiB of memory. Alternative is to make dynamic allocations and resize if necessary.
 
   uint64_t curr_block_num_;                             // The current block number.
+  int block_header_size_;                               // The size of the block header in bytes, including the number of chunks.
   int num_chunks_;                                      // The total number of chunks this block holds, regardless of which list it is.
+  float block_max_score_;                               // The maximum docID score within this block.
   int starting_chunk_;                                  // The chunk number of the first chunk in the block of the associated list.
   int curr_chunk_;                                      // The current actual chunk number we're up to within a block.
   uint32_t* curr_block_data_;                           // Points to the start of the next chunk to be decoded.
@@ -268,17 +284,32 @@ private:
  * ListData
  *
  * Used by the IndexReader during list traversal to hold current state of the list we're traversing.
+ *
+ * TODO: Doing a bunch of stuff here...clean up later!
  **************************************************************************************************************************************************************/
 class ListData {
 public:
-  ListData(uint64_t initial_block_num, int starting_chunk, int num_docs, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
-           const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor);
+  ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
+           int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
+           const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor,
+           bool single_term_query);
   ~ListData();
 
-  void AdvanceToNextBlock();
+  void FreeQueuedBlocks();
+
+  void ResetList(bool single_term_query);
+
+  void AdvanceBlock();
+  void AdvanceBlock(uint32_t doc_id);
+
+  void AdvanceChunk();
 
   BlockDecoder* curr_block_decoder() {
     return &curr_block_decoder_;
+  }
+
+  int layer_num() const {
+    return layer_num_;
   }
 
   int num_docs() const {
@@ -297,8 +328,48 @@ public:
     num_docs_left_ = num_docs;
   }
 
+  int num_docs_last_chunk() const {
+    return num_docs_last_chunk_;
+  }
+
+  int num_docs_complete_list() const {
+    return num_docs_complete_list_;
+  }
+
   int num_chunks() const {
     return num_chunks_;
+  }
+
+  int num_blocks() const {
+    return num_blocks_;
+  }
+
+  void decrease_num_blocks_left(int num_blocks_less) {
+    num_blocks_left_ -= num_blocks_less;
+  }
+
+  void decrease_num_chunks_last_block_left(int num_chunks_last_block_less) {
+    num_chunks_last_block_left_ -= num_chunks_last_block_less;
+  }
+
+  int num_chunks_last_block_left() const {
+    return num_chunks_last_block_left_;
+  }
+
+  int num_blocks_left() const {
+    return num_blocks_left_;
+  }
+
+  const uint32_t* last_doc_ids() const {
+    return last_doc_ids_;
+  }
+
+  float score_threshold() const {
+    return score_threshold_;
+  }
+
+  uint32_t curr_block_last_doc_id() const {
+    return last_doc_ids_[curr_block_idx_];
   }
 
   uint32_t prev_block_last_doc_id() const {
@@ -309,8 +380,38 @@ public:
     prev_block_last_doc_id_ = doc_id;
   }
 
+  // TODO: can we just set the initial/final block when we load it, instead of doing a branching test every time in here??? think so!
+
   bool initial_block() const {
-    return (curr_block_num_ == initial_block_num_) ? true : false;
+//    return (curr_block_num_ == initial_block_num_) ? true : false;
+
+    return (num_blocks_left_ == num_blocks_) ? true : false;
+  }
+
+  bool final_block() const {
+    return (num_blocks_left_ == 1) ? true : false;
+  }
+
+  bool final_chunk() const {
+    return (num_chunks_last_block_left_ == 1) ? true : false;
+  }
+
+  bool has_more() const {
+    return num_blocks_left_ != 0 && num_chunks_last_block_left_ != 0;
+
+//    return !final_block() || !final_chunk();
+  }
+
+  int term_num() const {
+    return term_num_;
+  }
+
+  void set_term_num(int term_num) {
+    term_num_ = term_num;
+  }
+
+  bool single_term_query() const {
+    return single_term_query_;
   }
 
   uint64_t cached_bytes_read() const {
@@ -322,23 +423,64 @@ public:
   }
 
 private:
-  const int kReadAheadBlocks;        // The number of blocks we want to read ahead into the cache.
+  void Init();
+
+  void SkipBlocks(int num_blocks, uint32_t initial_chunk_num);
+
+  void BlockBinarySearch(uint32_t doc_id);
+
+  void BlockSequentialSearch(uint32_t doc_id);
+
+  void SkipToBlock(uint32_t skip_to_block_idx);
+
+  // TODO: changing all the 64-bit block numbers to 32-bit...Should make these changes across the cache manager too.
+
+  const int kNumLeftoverDocs;        // The uneven number of documents that spilled over into the last chunk of the list.
+                                     // (that is, they couldn't be evenly divided by the standard amount of documents in a full chunk).
+  const int kReadAheadBlocks;        // The number of blocks we want to read ahead into the cache. TODO: Now that we know how many blocks we have per list --- we can be exact about this.
   CacheManager& cache_manager_;      // Used to retrieve blocks from the inverted list.
-  uint64_t initial_block_num_;       // The initial block number this list starts in.
-  uint64_t last_queued_block_num_;   // The (next to) last block number queued for transfer. Once we are up to the this block number,
-                                     // we know that we need to queue up this block as well as the next 'kReadAheadBlocks' more blocks for transfer.
-  uint64_t curr_block_num_;          // The current block number we're up to during traversal of the inverted list.
   BlockDecoder curr_block_decoder_;  // The current block being processed in this inverted list.
+
+  int layer_num_;                    //
+  uint32_t initial_chunk_num_;       // The initial chunk number this list starts in.
+  uint32_t initial_block_num_;       // The initial block number this list starts in.
+  uint32_t curr_block_num_;          // The current block number we're up to during traversal of the inverted list.
+  uint32_t curr_block_idx_;          // The current block index (starts from 0) we're up to during traversal of the inverted list.
+
   int num_docs_;                     // The total number of documents in this inverted list.
+  int num_docs_complete_list_;       // The total number of documents in the complete inverted list (in case this is just one layer of a complete list).
+                                     // We use this amount to calculate the BM25 score, so that the layered and
+                                     // non-layered index approaches produce the same document scores.
+
+  int num_docs_last_chunk_;          // The number of documents contained in the last chunk of this inverted list.
+
+  int num_chunks_;                   // The total number of chunks we have in this inverted list.
+
+  int num_chunks_last_block_;        // The number of chunks contained in the last block of this inverted list.
+  int num_blocks_;                   // The total number of blocks in this inverted list.
+
+  // These help us keep track of the current position within an inverted list.
   int num_docs_left_;                // The number of documents we have left to traverse in this inverted list (it could be negative by the end).
                                      // Only updated after NextGEQ() finishes with a chunk and moves on to the next one.
                                      // Updated and used by the IndexReader in NextGEQ().
-  int num_chunks_;                   // The total number of chunks we have in this inverted list.
-                                     // Updated and used by the IndexReader in NextGEQ().
+
+  int num_chunks_last_block_left_;   //
+  int num_blocks_left_;              //
+  bool first_block_loaded_;          //
+
+  const uint32_t* last_doc_ids_;     //
+                                     //
+  float score_threshold_;            //
+
   uint32_t prev_block_last_doc_id_;  // The last docID of the last chunk of the previous block. This is used by the IndexReader as necessary in NextGEQ().
                                      // It's necessary for the case when a list spans several blocks and the docIDs are gap coded, so that when decoding gaps
                                      // from docIDs appearing in subsequent blocks (subsequent from the first block), we need to know from what offset
                                      // (the last docID of the previous block) those docIDs start at.
+  uint32_t last_queued_block_num_;   // The last block number that was not yet queued for transfer.
+
+  int term_num_;                     // May be used by the query processor to map this object back to the term it corresponds to.
+
+  bool single_term_query_;           // A hint from an external source that allows us to optimize list traversal if we know that we'll never be doing any list skipping.
 
   uint64_t cached_bytes_read_;       // Keeps track of the number of bytes read from the cache for this list.
   uint64_t disk_bytes_read_;         // Keeps track of the number of bytes read from the disk for this list.
@@ -348,26 +490,19 @@ private:
  * LexiconData
  *
  * Container for entries in the lexicon.
+ *
+ * TODO: We'll probably do better here memory-wise just using a c-string, because a NULL terminated string is just one extra byte while using an integer to
+ *       store the length is four extra bytes.
+ * TODO: If we know the index is single layered, we don't need to store a few of the fields, they'd be just taking up memory.
  **************************************************************************************************************************************************************/
 class LexiconData {
 public:
-  LexiconData() :
-    term_(NULL), term_len_(0), block_number_(0), chunk_number_(0), num_docs_(0), next_(NULL) {
-  }
+  LexiconData(const char* term, int term_len);
+  ~LexiconData();
 
-  LexiconData(const char* term, int term_len) :
-    term_(new char[term_len]), term_len_(term_len), block_number_(0), chunk_number_(0), num_docs_(0), next_(NULL) {
-    memcpy(term_, term, term_len);
-  }
-
-  LexiconData(const char* term, int term_len, int block_number, int chunk_number, int num_docs) :
-    term_(new char[term_len]), term_len_(term_len), block_number_(block_number), chunk_number_(chunk_number), num_docs_(num_docs), next_(NULL) {
-    memcpy(term_, term, term_len);
-  }
-
-  ~LexiconData() {
-    delete[] term_;
-  }
+  void InitLayers();
+  void InitLayers(int num_layers, const int* num_docs, const int* num_chunks, const int* num_chunks_last_block, const int* num_blocks,
+                  const int* block_numbers, const int* chunk_numbers, const float* score_thresholds);
 
   const char* term() const {
     return term_;
@@ -377,32 +512,45 @@ public:
     return term_len_;
   }
 
-  int block_number() const {
-    return block_number_;
+  int num_layers() const {
+    return num_layers_;
   }
 
-  void set_block_number(int block_number) {
-    block_number_ = block_number;
-  }
-
-  int chunk_number() const {
-    return chunk_number_;
-  }
-
-  void set_chunk_number(int chunk_number) {
-    chunk_number_ = chunk_number;
-  }
-
-  int num_docs() const {
+  const int* num_docs() const {
     return num_docs_;
   }
 
-  void set_num_docs(int num_docs) {
-    num_docs_ = num_docs;
+  const int* num_chunks() const {
+    return num_chunks_;
   }
 
-  void update_num_docs(int more_docs) {
-    num_docs_ += more_docs;
+  const int* num_chunks_last_block() const {
+    return num_chunks_last_block_;
+  }
+
+  const int* num_blocks() const {
+    return num_blocks_;
+  }
+
+  const int* block_numbers() const {
+    return block_numbers_;
+  }
+
+  const int* chunk_numbers() const {
+    return chunk_numbers_;
+  }
+
+  const float* score_thresholds() const {
+    return score_thresholds_;
+  }
+
+  uint32_t* const * last_doc_ids() const {
+    return last_doc_ids_;
+  }
+
+  void set_last_doc_ids_layer_ptr(uint32_t* last_doc_ids_layer, int layer_num) {
+    assert(layer_num < kMaxLayers);
+    last_doc_ids_[layer_num] = last_doc_ids_layer;
   }
 
   LexiconData* next() const {
@@ -414,17 +562,32 @@ public:
   }
 
 private:
-  char* term_;         // Pointer to the term this lexicon entry holds (it is not NULL terminated!).
-  int term_len_;       // The length of the 'term_', since it's not NULL terminated.
-  int block_number_;   // The initial block number of the inverted list for this term.
-  int chunk_number_;   // The initial chunk number in the initial block of the inverted list for this term.
-  int num_docs_;       // The total number of documents in the inverted list for this term.
+  int term_len_;  // The length of the 'term_', since it's not NULL terminated.
+  char* term_;    // Pointer to the term this lexicon entry holds (it is not NULL terminated!).
+
+  const static int kMaxLayers = MAX_LIST_LAYERS;
+  int num_layers_;
+
+  int num_docs_[kMaxLayers];               // The total number of documents in the inverted list layers for this term.
+  int num_chunks_[kMaxLayers];             // The total number of chunks in the inverted list layers for this term.
+  int num_chunks_last_block_[kMaxLayers];  // The number of chunks in the last block in the inverted list layers for this term.
+  int num_blocks_[kMaxLayers];             // The total number of blocks in the inverted list layers for this term.
+  int block_numbers_[kMaxLayers];          // The initial block numbers of the inverted list layers for this term.
+  int chunk_numbers_[kMaxLayers];          // The initial chunk numbers in the initial blocks of the inverted list layers for this term.
+  float score_thresholds_[kMaxLayers];     // The max BM25 document score in each inverted list layer for this term.
+  uint32_t* last_doc_ids_[kMaxLayers];     // For each layer, stores a pointer to an array of docIDs. The index into the array corresponds to the block number within the list
+                                           // and the docID is the last docID in the block for this inverted list.
+
   LexiconData* next_;  // Pointer to the next lexicon entry.
 };
 
 /**************************************************************************************************************************************************************
  * Lexicon
  *
+ * TODO: Would be wise to setup a large memory pool (we can even count during lexicon construction how many bytes we'll need). Then the LexiconData class
+ *       can just take pointers to data in this memory pool without copying it (or just 1 pointer and decode it on the fly). This means variable sized data could be
+ *       stored more compactly, without memory fragmentation. Best of all, we can adapt our decoding technique based on what data we stored in this memory pool;
+ *       then we won't have to, say, store layered information if the index is only single layered.
  **************************************************************************************************************************************************************/
 class Lexicon {
 public:
@@ -440,13 +603,25 @@ public:
   // Returns the next lexicon entry lexicographically, NULL if no more.
   LexiconData* GetNextEntry();
 
+  MoveToFrontHashTable<LexiconData>* lexicon() const {
+    return lexicon_;
+  }
+
 private:
+  // All the pointer are pointing to our local buffer. We will copy them to the LexiconData before invalidating the buffer.
   struct LexiconEntry {
     char* term;
     int term_len;
-    int block_number;
-    int chunk_number;
-    int num_docs;
+
+    int num_layers;
+
+    int* num_docs;
+    int* num_chunks;
+    int* num_chunks_last_block;
+    int* num_blocks;
+    int* block_numbers;
+    int* chunk_numbers;
+    float* score_thresholds;
   };
 
   void GetNext(LexiconEntry* lexicon_entry);
@@ -457,7 +632,7 @@ private:
   char* lexicon_buffer_ptr_;                    // Current position in the lexicon buffer.
   int lexicon_fd_;                              // File descriptor for the lexicon.
   off_t lexicon_file_size_;                     // The size of the on disk lexicon file.
-  int num_bytes_read_;                          // Number of bytes of lexicon read so far.
+  off_t num_bytes_read_;                          // Number of bytes of lexicon read so far.
 };
 
 /**************************************************************************************************************************************************************
@@ -481,11 +656,21 @@ public:
   };
 
   IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
-              const char* meta_info_filename);
+              const char* meta_info_filename, bool use_positions);
 
-  ListData* OpenList(const LexiconData& lex_data);
+  ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query = false);
+  ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query, int term_num);
+
   void CloseList(ListData* list_data);
+
   uint32_t NextGEQ(ListData* list_data, uint32_t doc_id);
+
+  uint32_t NextGEQOld(ListData* list_data, uint32_t doc_id);
+
+  float GetBlockScoreBound(ListData* list_data);
+
+  uint32_t NextGEQScore(ListData* list_data, float min_score);
+
   uint32_t GetFreq(ListData* list_data, uint32_t doc_id);
 
   // 'list_data' is a pointer to the inverted list information, returned by 'OpenList()'.
@@ -501,7 +686,6 @@ public:
   int GetDocLen(uint32_t doc_id);
   const char* GetDocUrl(uint32_t doc_id);
 
-  void LoadDocMap(const char* doc_map_filename);
   void LoadMetaInfo();
 
   void ResetStats() {
@@ -512,6 +696,10 @@ public:
 
   Lexicon& lexicon() {
     return lexicon_;
+  }
+
+  const DocumentMapReader& document_map() const {
+    return document_map_;
   }
 
   const IndexConfiguration& meta_info() const {
@@ -564,10 +752,12 @@ private:
   const char* kLexiconSizeKey;         // The key in the configuration file used to define the lexicon size.
   const long int kLexiconSize;         // The size of the hash table for the lexicon.
   Lexicon lexicon_;                    // The lexicon data structure.
+  DocumentMapReader document_map_;     // The document map data structure.
   CacheManager& cache_manager_;        // Manages the block cache.
   IndexConfiguration meta_info_;       // The index meta information.
   bool includes_contexts_;             // True if the index contains context data.
   bool includes_positions_;            // True if the index contains position data.
+  bool use_positions_;                 // A hint from an external source that allows us to speed up processing a bit if it doesn't require positions.
 
   // Decompressors for various portions of the index.
   CodingPolicy doc_id_decompressor_;
@@ -586,7 +776,7 @@ private:
  * Compares the inverted list lengths, used to sort query terms in order from shortest list to longest.
  **************************************************************************************************************************************************************/
 struct ListCompare {
-  bool operator()(const LexiconData* l, const LexiconData* r) const {
+  bool operator()(const ListData* l, const ListData* r) const {
     return l->num_docs() < r->num_docs();
   }
 };
