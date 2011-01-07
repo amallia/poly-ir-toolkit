@@ -76,7 +76,7 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
 
     CacheManager* cache_policy = new MergingCachePolicy(curr_index_files.index_filename().c_str());
     IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, curr_index_files.lexicon_filename().c_str(),
-                                                curr_index_files.document_map_filename().c_str(), curr_index_files.meta_info_filename().c_str());
+                                                curr_index_files.document_map_filename().c_str(), curr_index_files.meta_info_filename().c_str(), true);
 
     // If one index from the ones to be merged does not contain contexts or positions
     // then the whole merged index will not contain them.
@@ -466,6 +466,9 @@ void IndexMerger::WriteMetaFile() {
   metafile_values << Configuration::GetConfiguration().GetValue(config_properties::kMergingBlockHeaderCoding);
   index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding, metafile_values.str());
   metafile_values.str("");
+
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumChunks, Stringify(index_builder_->total_num_chunks()));
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumPerTermBlocks, Stringify(index_builder_->total_num_per_term_blocks()));
 
   metafile_values << total_document_lengths_;
   index_metafile.AddKeyValuePair(meta_properties::kTotalDocumentLengths, metafile_values.str());
