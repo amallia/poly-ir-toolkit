@@ -36,6 +36,8 @@
 #include <cctype>
 #include <stdint.h>
 
+#include <strings.h>
+
 template<class Callback>
   class Parser {
   public:
@@ -44,7 +46,7 @@ template<class Callback>
     };
 
     enum DocType {
-      kStandard, kTrec
+      kStandard, kTrec, kWarc, kNoSuchDocType
     };
 
     enum Context {
@@ -60,14 +62,35 @@ template<class Callback>
       kTagNot, kTagB, kTagI, kTagH, kTagTitle, kTagScript, kTagDoc, kTagDocno, kTagDochdr
     };
 
+    struct WarcHeader {
+      int content_length;
+
+      const char* url;
+      int url_len;
+
+      const char* docno;
+      int docno_len;
+    };
+
     Parser(const ParsingMode& parsing_mode, const DocType& doc_type, Callback* callback);
+
     int ParseDocumentCollection(const char* buf, int buf_len, uint32_t& doc_id, int& avg_doc_length);
+
+    // TODO: Can make private.
+    int ParseBuffer(const char* buf, int buf_len, uint32_t& doc_id, int& avg_doc_length, const char*& curr_p);
+
     Tag ProcessTag(const char* tag, int tag_len, bool& in_closing_tag, uint32_t doc_id);
+
     bool IsValidTag(const char* curr_tag_p, const char* tag, int tag_len, const char curr_tag_name[]);
+
     bool IsWithinBounds(const char* curr, const char* start, int len);
+
     // Handles the case where you have a tag that starts with the same characters, but the ending characters could be anything within a range.
     bool AreValidTags(const char* curr_tag_p, const char* tag, int tag_len, const char curr_tag_base[], const char start_range[], const char end_range[],
                       int range_len);
+
+    // Processes the WARC header. Returns the number of bytes read from the header.
+    int ProcessWarcHeader(const char* buf, int buf_len, const char* curr_p, WarcHeader* header);
 
     bool IsIndexable(char c) {
       return isalnum(static_cast<unsigned char> (c));
@@ -90,6 +113,16 @@ template<class Callback>
         BitSet(context, set_context);
       else
         BitUnset(context, set_context);
+    }
+
+    static DocType GetDocumentCollectionFormat(const char* doc_type_str) {
+      if (strcasecmp("trec", doc_type_str) == 0) {
+        return kTrec;
+      } else if (strcasecmp("warc", doc_type_str) == 0) {
+        return kWarc;
+      } else {
+        return kNoSuchDocType;
+      }
     }
 
   private:
