@@ -46,6 +46,9 @@
 /**************************************************************************************************************************************************************
  * InvertedListMetaData
  *
+ * TODO: If we ever move the block headers to the front of the list (optimization, also allows multilevel skip list, by indexing the block headers).
+ *       Will need a pointer to the start of the block headers, plus a pointer to the start of the actual list data (for OR/single word queries) for when we
+ *       don't need to decode block headers.
  **************************************************************************************************************************************************************/
 class InvertedListMetaData {
 public:
@@ -62,42 +65,108 @@ public:
     return term_len_;
   }
 
-  int block_number() const {
-    return block_number_;
+  int num_layers() const {
+    return num_layers_;
   }
 
-  void set_block_number(int block_number) {
-    block_number_ = block_number;
-  }
-
-  int chunk_number() const {
-    return chunk_number_;
-  }
-
-  void set_chunk_number(int chunk_number) {
-    chunk_number_ = chunk_number;
-  }
-
-  int num_docs() const {
+  const int* num_docs() const {
     return num_docs_;
   }
 
-  void set_num_docs(int num_docs) {
-    num_docs_ = num_docs;
+  const int* num_chunks() const {
+    return num_chunks_;
   }
 
-  void UpdateNumDocs(int more_docs) {
-    num_docs_ += more_docs;
+  const int* num_chunks_last_block() const {
+    return num_chunks_last_block_;
+  }
+
+  const int* num_blocks() const {
+    return num_blocks_;
+  }
+
+  const int* block_numbers() const {
+    return block_numbers_;
+  }
+
+  const int* chunk_numbers() const {
+    return chunk_numbers_;
+  }
+
+  const float* score_thresholds() const {
+    return score_thresholds_;
+  }
+
+  void increase_curr_layer() {
+    ++num_layers_;
+  }
+
+  void set_curr_layer_num_docs(int num_docs) {
+    assert(num_layers_ < kMaxLayers);
+    num_docs_[num_layers_] = num_docs;
+  }
+
+  void increase_curr_layer_num_docs(int num_more_docs) {
+    assert(num_layers_ < kMaxLayers);
+    num_docs_[num_layers_] += num_more_docs;
+  }
+
+  void set_curr_layer_num_chunks(int num_chunks) {
+    assert(num_layers_ < kMaxLayers);
+    num_chunks_[num_layers_] = num_chunks;
+  }
+
+  void increase_curr_layer_num_chunks(int num_more_chunks) {
+    assert(num_layers_ < kMaxLayers);
+    num_chunks_[num_layers_] += num_more_chunks;
+  }
+
+  void set_curr_layer_num_chunks_last_block(int num_chunks_last_block) {
+    assert(num_layers_ < kMaxLayers);
+    num_chunks_last_block_[num_layers_] = num_chunks_last_block;
+  }
+
+  void increase_curr_layer_num_chunks_last_block(int num_more_chunks_last_block) {
+    assert(num_layers_ < kMaxLayers);
+    num_chunks_last_block_[num_layers_] += num_more_chunks_last_block;
+  }
+
+  void set_curr_layer_num_blocks(int num_blocks) {
+    assert(num_layers_ < kMaxLayers);
+    num_blocks_[num_layers_] = num_blocks;
+  }
+
+  void increase_curr_layer_num_blocks(int num_more_blocks) {
+    assert(num_layers_ < kMaxLayers);
+    num_blocks_[num_layers_] += num_more_blocks;
+  }
+
+  void set_curr_layer_offset(int block_number, int chunk_number) {
+    assert(num_layers_ < kMaxLayers);
+    block_numbers_[num_layers_] = block_number;
+    chunk_numbers_[num_layers_] = chunk_number;
+  }
+
+  void set_curr_layer_threshold(float score_threshold) {
+    assert(num_layers_ < kMaxLayers);
+    score_thresholds_[num_layers_] = score_threshold;
   }
 
 private:
+  void Init();
+
   char* term_;
   int term_len_;
 
-  int block_number_;  // The offset for a list is ('block_number_' * 'BlockEncoder::kBlockSize'), since each block is the same exact size.
-  int chunk_number_;
-
-  int num_docs_;
+  const static int kMaxLayers = MAX_LIST_LAYERS;
+  int num_layers_;                                // Used to keep track of the current layer we're processing info for; at the end, will hold the number of layers we have for a particular inverted list.
+  int num_docs_[kMaxLayers];
+  int num_chunks_[kMaxLayers];
+  int num_chunks_last_block_[kMaxLayers];
+  int num_blocks_[kMaxLayers];
+  int block_numbers_[kMaxLayers];
+  int chunk_numbers_[kMaxLayers];
+  float score_thresholds_[kMaxLayers];            // If our index is only single layered throughout, this field is not useful, so we can save some memory and not load it.
 };
 
 /**************************************************************************************************************************************************************
@@ -121,6 +190,14 @@ public:
 
   uint32_t last_doc_id() const {
     return last_doc_id_;
+  }
+
+  float max_score() const {
+    return max_score_;
+  }
+
+  void set_max_score(float max_score) {
+    max_score_ = max_score;
   }
 
   // Returns the total size of the compressed portions of this chunk in words.
@@ -171,6 +248,7 @@ private:
 
   uint32_t first_doc_id_;  // Decoded first docID in this chunk.
   uint32_t last_doc_id_;   // Decoded last docID in this chunk.
+  float max_score_;        // Maximum partial docID score within this chunk.
 
   // These buffers are used for compression of chunks.
   uint32_t compressed_doc_ids_[CompressedOutBufferUpperbound(kChunkSize)];                     // Array of compressed docIDs.
@@ -207,6 +285,10 @@ public:
     return num_chunks_;
   }
 
+  void set_block_max_score(float block_max_score) {
+    block_max_score_ = block_max_score;
+  }
+
   int num_block_header_bytes() const {
     return num_block_header_bytes_;
   }
@@ -237,14 +319,17 @@ private:
 
   // The upper bound on the number of chunk properties in a block,
   // calculated by getting the max number of chunks in a block and multiplying by 2 properties per chunk.
-  static const int kChunkPropertiesUpperbound = 2 * (kBlockSize / kChunkSizeLowerBound);
+  static const int kChunkPropertiesUpperbound = 2 * (kBlockSize / kChunkSizeLowerBound); // TODO: having problem that this is too small...
+                                                                                         //       MIN_COMPRESSED_CHUNK_SIZE needs to be less when we don't index positions!
 
   // The upper bound on the number of chunk properties in a single block (sized for proper compression for various coding policies).
   static const int kChunkPropertiesCompressedUpperbound = CompressedOutBufferUpperbound(kChunkPropertiesUpperbound);
 
   const CodingPolicy& block_header_compressor_;
 
-  uint32_t num_chunks_;  // The number of chunks contained within this block.
+  uint32_t block_header_size_;  // The size of the block header including the number of chunks; determined in 'Finalize()'.
+  uint32_t num_chunks_;         // The number of chunks contained within this block.
+  float block_max_score_;       // The maximum docID score within this block.
 
   uint32_t block_data_[kBlockSize / sizeof(uint32_t)];  // The compressed chunk data.
   int block_data_offset_;                               // Current offset within the 'block_data_'.
@@ -281,6 +366,16 @@ public:
   void WriteLexicon();
 
   void Finalize();
+
+  void FinalizeLayer(float score_threshold);
+
+  uint64_t total_num_chunks() const {
+    return total_num_chunks_;
+  }
+
+  uint64_t total_num_per_term_blocks() const {
+    return total_num_per_term_blocks_;
+  }
 
   uint64_t num_unique_terms() const {
     return num_unique_terms_;
@@ -319,7 +414,9 @@ private:
 
   int curr_block_number_;
   int curr_chunk_number_;
-  const char* kIndexFilename;
+
+  bool insert_layer_offset_;
+
   int index_fd_;
 
   const int kLexiconBufferSize;
@@ -328,6 +425,11 @@ private:
   int lexicon_fd_;
 
   const CodingPolicy& block_header_compressor_;
+
+  // Used to build an in-memory block header index during query processing (when the index is loaded into main memory).
+  uint64_t total_num_chunks_;           // The total number of chunks in this index.
+  uint64_t total_num_per_term_blocks_;  // The total number of per term blocks in this index
+                                        // (as if each term had it's own block, not shared with other terms).
 
   // Index statistics.
   uint64_t num_unique_terms_;
