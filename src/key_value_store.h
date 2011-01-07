@@ -132,13 +132,25 @@ public:
     };
 
   std::string GetValue(const std::string& key) const;
+
   KeyValuePair GetKeyValuePair(const std::string& key) const;
+
   KeyValueResult<std::string> GetStringValue(const std::string& key) const;
+
   KeyValueResult<bool> GetBooleanValue(const std::string& key) const;
+
   KeyValueResult<long int> GetNumericalValue(const std::string& key) const;
+
   KeyValueResult<double> GetFloatingValue(const std::string& key) const;
+
   void AddKeyValuePair(const std::string& key, const std::string& value);
+
+  // Returns true if the existing value for the 'key' was set to 'value'
+  // and false if the 'key' 'value' pair was added to the key value store.
+  bool SetKeyValue(const std::string& key, const std::string& value);
+
   Status WriteKeyValueStore(const char* filename) const;
+
   Status LoadKeyValueStore(const char* filename);
 
 private:

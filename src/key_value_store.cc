@@ -50,7 +50,7 @@ KeyValueStore::KeyValuePair KeyValueStore::GetKeyValuePair(const string& key) co
     }
   }
 
-  return KeyValuePair();
+  return KeyValuePair(key, "");
 }
 
 KeyValueStore::KeyValueResult<string> KeyValueStore::GetStringValue(const string& key) const {
@@ -136,6 +136,23 @@ KeyValueStore::KeyValueResult<double> KeyValueStore::GetFloatingValue(const stri
 
 void KeyValueStore::AddKeyValuePair(const string& key, const string& value) {
   key_value_store_.push_back(make_pair(key, value));
+}
+
+bool KeyValueStore::SetKeyValue(const string& key, const string& value) {
+  bool set_value = false;
+  for (vector<KeyValuePair>::iterator itr = key_value_store_.begin(); itr != key_value_store_.end(); ++itr) {
+    if (key == itr->first) {
+      itr->second = value;
+      set_value = true;
+      break;
+    }
+  }
+
+  if (!set_value) {
+    AddKeyValuePair(key, value);
+  }
+
+  return set_value;
 }
 
 KeyValueStore::Status KeyValueStore::LoadKeyValueStore(const char* filename) {
