@@ -29,17 +29,7 @@
 // Contains 'main'. Starting point for exploring the program.
 //
 // High Priority:
-// TODO: Implement "checkpointing"; if the indexer is killed or even crashes, it should be able to start again without re-indexing everything.
-// TODO: The index cat and diff utilities should fully decode positions (right now it's outputting gap coded ones).
-// TODO: If we allow overlapping docIDs during merge (overlapping over several indices), then when merging positions, must fully decode them for each index
-//       first and then gap code them back again.
-// TODO: Need to make sure the term hash table is of appropriate size during querying. Do it based on number of unique words in the index.
-// TODO: Consider outputting intermediate indices with crappier (but faster compression). In this case, compression speed is also important. This should result
-//       in faster merging and index building. Final index generation should use good compression methods. (Make it configurable). Can also try benchmarking
-//       indexing and merging speed against zettair, since comparison would be more fair (use varbyte coding for the index).
-// TODO: Allow configuration for user to specify how much memory to use while merging. Then system can pick buffer sizes, and appropriate merge degree.
-//       Choose merge degree so that we can merge in as few passes as possible, and so that every pass merges approximately the same amount of indices.
-//       I suspect this would result in better processor cache usage, since heaps will be smaller, and less buffers.
+//
 //
 // Minor Improvements:
 // TODO: While doing merging, set the optimized flag that it's a single term query.
@@ -47,8 +37,16 @@
 // TODO: During query processing, if we request more blocks than there are in the index, an assertion should be activated. Might want to check this...
 // TODO: Check what happens when passing an empty index (an empty file) to query, merge, etc...
 // TODO: When the cache is full and you have a cache miss, it might be wise to evict a bunch of blocks (30% in one paper) to amortize the eviction cost.
+// TODO: Need to make sure the term hash table is of appropriate size during querying. Do it based on number of unique words in the index.
 //
 // Low Priority:
+// TODO: Implement "checkpointing"; if the indexer is killed or even crashes, it should be able to start again without re-indexing everything.
+// TODO: The index cat and diff utilities should fully decode positions (right now it's outputting gap coded ones).
+// TODO: If we allow overlapping docIDs during merge (overlapping over several indices), then when merging positions, must fully decode them for each index
+//       first and then gap code them back again.
+// TODO: Allow configuration for user to specify how much memory to use while merging. Then system can pick buffer sizes, and appropriate merge degree.
+//       Choose merge degree so that we can merge in as few passes as possible, and so that every pass merges approximately the same amount of indices.
+//       I suspect this would result in better processor cache usage, since heaps will be smaller, and less buffers.
 // TODO: Detect whether a document collection is gzipped or not and automatically uncompress it or just load it into memory.
 // TODO: Might want to limit the number of index files per directory by placing them in numbered directories.
 // TODO: What about doing an in-place merge? Since we already use 64KB blocks, it might be helpful.
@@ -793,14 +791,8 @@ void SimdTest() {
  *       The parent that sets this up can simply split the files to index for each process and pipe them into each child (I/O redirection) and then die.
  *       Child (or maybe the parent) creates the folder for the index.
  *       Things like merging can be done independently on each folder, and then we can supply a custom merge input -- to do the final merge.
- *
  */
 
-/*
- * TODO: In clueweb sample file indexing --- need to fix bug --- where chunk properties upperbound fails
- * This is because we index without positions --- but to determine the upperbound we need to know the min size of a chunk --- but we assume it includes positions --- so we need to adjust it
- * for when we have no positions.
- */
 int main(int argc, char** argv) {
   const char* opt_string = "iqcdh";
   const struct option long_opts[] = { { "index", no_argument, NULL, 'i' },                                // Index the document collection bundles.
