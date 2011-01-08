@@ -353,24 +353,11 @@ void QueryProcessor::CloseListLayers(int num_query_terms, int max_layers, ListDa
 
 
 /*
- * TODO: maximum query length should be taken into account? although the query log doesn't really seem to ever exceed our limit...
  * TODO: for OR semantics, don't need to load block level index and do binary search --- but it is useful when we switch to AND mode...
- *
- * TODO: CHECK IF WE EVER EARLY TERMINATE ---- it's a little odd, seems like we always process all layers?
- * TODO: beach dept miami police records    ---- last docID different --- check, maybe because of same score as 11th docID?
- *
- * TODO: Query:
- *              beach dept miami police records                 --------- RESULT DIFFERS (Also, 1 score by a tiny amount)
- *
- *
- *              forest national toyobe                          --------- two docs with same score, switched positions
- *              hurricanes most severe                          --------- 2 pairs of docs with same score switched positions
- *              and armadillo the man boy cat dog lol is of     --------- two docs with same score, switched positions
- *
- *    Query 'and armadillo'--- it's odd that we rarely get early termination --- most of the time, we just get speedup from AND processing mode!
+ * Query 'and armadillo'--- it's odd that we rarely get early termination --- most of the time, we just get speedup from AND processing mode!
  */
 
-// Remember that this technique is not SCORE SAFE, but it still should be RANK safe
+// Remember that this technique is not score safe, but it still should be rank safe.
 // Implements approach described by Anh/Moffat with improvements by Strohman/Croft, but with standard BM25 scoring, instead of impacts.
 // Problem with the BM25 scoring is that to maintain the threshold value, we must maintain a heap (or search through an array).
 // This is more expensive than in an impact sorted index, where the score is the same for all documents in a segment.
@@ -387,8 +374,9 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
   int total_num_results = 0;
 
-  // TODO: We can only support queries of a certain length. Fix this.
-  assert(num_query_terms <= static_cast<int>((sizeof(uint32_t)*8)));
+  // TODO: We can only support queries of a certain length (32 words). Can fix this by doing unoptimized processing for the shortest lists which do not
+  //       fit within the 32 word limit.
+  assert(num_query_terms <= static_cast<int>((sizeof(uint32_t) * 8)));
 
   ListData* max_score_sorted_list_data_pointers[total_num_layers];  // Using a variable length array here.
   uint32_t max_num_accumulators = 0;
