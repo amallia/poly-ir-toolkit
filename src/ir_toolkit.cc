@@ -89,7 +89,11 @@
 #include <libgen.h>
 #include <signal.h>
 
-#include <xmmintrin.h>
+//TODO: Play around with SIMD extensions.
+#include <mmintrin.h>   // MMX
+#include <xmmintrin.h>  // SSE
+#include <emmintrin.h>  // SSE2
+#include <pmmintrin.h>  // SSE3
 
 #include "cache_manager.h"
 #include "config_file_properties.h"
