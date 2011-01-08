@@ -29,9 +29,8 @@
 //
 /*
  * TODO: Index reorganization idea:
- * Lexicon could contain the total number of blocks in the inverted list, so we avoid reading in extra blocks.
  *
- * Store all the block headers at the front of the list together at the front of the list.
+ * Store all the block headers together at the front of the list.
  * We can also create a "layered" skipping method by indexing the block headers.
  * This way, we can first check the block header index, and skip ahead to the correct block header.
  * We then decompress the block header and find the proper chunk we need to get.
