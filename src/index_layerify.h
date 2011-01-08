@@ -31,12 +31,16 @@
 #ifndef INDEX_LAYERIFY_H_
 #define INDEX_LAYERIFY_H_
 
+// Enables debugging output for this module.
+#define INDEX_LAYERIFY_DEBUG
+
 #include <cassert>
 #include <cmath>
 #include <stdint.h>
 
-#include <iostream>//TODO
-#include <vector>
+#ifdef INDEX_LAYERIFY_DEBUG
+#include <iostream>
+#endif
 
 #include "coding_policy.h"
 #include "document_map.h"
@@ -63,14 +67,14 @@ private:
   float GetChunkMaxScore(const DocIdScoreComparison& doc_id_score_comparator, IndexEntry* chunk_entries, int num_chunk_entries);
   void WriteMetaFile(const std::string& meta_filename);
 
-  IndexFiles output_index_files_;             // The index filenames for the layered index.
-  Index* index_;                              // The index we're creating layers for.
-  IndexBuilder* index_builder_;               // The current layered index we're building.
+  IndexFiles output_index_files_;  // The index filenames for the layered index.
+  Index* index_;                   // The index we're creating layers for.
+  IndexBuilder* index_builder_;    // The current layered index we're building.
 
   // Some index properties.
   bool includes_contexts_;
   bool includes_positions_;
-  bool overlapping_layers_;  // TODO: Get from config file (make new section for Index Layers). Right now, default is true.
+  bool overlapping_layers_;
   int num_layers_;
 
   // Compressors to be used for various parts of the index.

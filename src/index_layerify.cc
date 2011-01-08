@@ -177,10 +177,10 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
   while (index_->NextTerm()) {
     /////////////////////////////////////TODO skip layering lists to the ones we want for debugging.
-    string curr_term = string(index_->curr_term(), index_->curr_term_len());
-    if (!(curr_term == "beneficiaries" /*|| curr_term == "insurance" || curr_term == "irs" || curr_term == "life"*/))
-      continue;
-    cout << "CURR TERM: " << curr_term << endl;
+//    string curr_term = string(index_->curr_term(), index_->curr_term_len());
+//    if (!(curr_term == "beneficiaries" || curr_term == "insurance" || curr_term == "irs" || curr_term == "life"))
+//      continue;
+//    cout << "CURR TERM: " << curr_term << endl;
     //////////////////////////////////////
 
     // TODO: Probably want to reuse buffers, unless we need to resize...
@@ -311,7 +311,7 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
       index_builder_->FinalizeLayer(score_threshold);  // Need to call this before writing out the next layer.
 
       ////////////////TODO
-      cout << "set score threshold for list: " << score_threshold << ", layer # " << i << endl;
+//      cout << "set score threshold for list: " << score_threshold << ", layer # " << i << endl;
       //////////////////
     }
 
@@ -379,7 +379,7 @@ void LayeredIndexGenerator::DumpToIndex(const DocIdScoreComparison& doc_id_score
     chunk.set_max_score(GetChunkMaxScore(doc_id_score_comparator, index_entries + (index_entries_offset - doc_ids_offset), doc_ids_offset));
 
     ////////////////////TODO
-    cout << "max score: " << chunk.max_score() << endl;
+//    cout << "max score: " << chunk.max_score() << endl;
     /////////////////////
 
     prev_chunk_last_doc_id = chunk.last_doc_id();
