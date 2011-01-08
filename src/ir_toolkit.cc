@@ -29,7 +29,11 @@
 // Contains 'main'. Starting point for exploring the program.
 //
 // High Priority:
-//
+// TODO: Implement parallel indexing capability. Have command line options to specify the number of processes we want and fork off several irtk processes.
+//       Each process should create a unique folder for outputting index files (perhaps using the pid for the folder name).
+//       The parent that sets this up can split the files to index for each child process and pipe them into each child (through I/O redirection) and then die.
+//       Things like merging can be done independently within each folder. The final merge would have to be done by specifying the indices in each folder.
+//       Note that each process would need to record the docID offset for it's index. The final merge would have to take the offsets into account.
 //
 // Minor Improvements:
 // TODO: While doing merging, set the optimized flag that it's a single term query.
@@ -783,15 +787,6 @@ void SimdTest() {
     cout << "RESULT " << i << ": " << vec[i] << endl;
   }
 }
-
-/*
- * TODO: Ideas for parallelizing indexing for ClueWeb:
- *       Have command line options to specify number of processes we want and fork off several IRTK processes -- and we can supply the proper command line args
- *       each process creates a unique folder for outputting index files -- perhaps using the pid for the folder name
- *       The parent that sets this up can simply split the files to index for each process and pipe them into each child (I/O redirection) and then die.
- *       Child (or maybe the parent) creates the folder for the index.
- *       Things like merging can be done independently on each folder, and then we can supply a custom merge input -- to do the final merge.
- */
 
 int main(int argc, char** argv) {
   const char* opt_string = "iqcdh";
