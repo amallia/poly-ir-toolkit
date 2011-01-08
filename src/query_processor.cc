@@ -181,8 +181,6 @@ void QueryProcessor::LoadStopWordsList(const char* stop_words_list_filename) {
   }
 }
 
-// TODO: Block level index could also have threshold information --- highest score in block for a particular term. Additional skipping options possible.
-
 // We iterate through the lexicon and decode all the block headers for the current inverted list.
 // We then make a block level index by storing the last docID of each block for our current inverted list.
 // Each inverted list layer will have it's own block level index (pointed to by the lexicon).
