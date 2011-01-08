@@ -47,9 +47,13 @@
 // and minimizes empty space at the end of a block since chunks are small.
 #define MAX_FREQUENCY_PROPERTIES 64
 
-// The lower bound size of a single chunk in bytes (one integer per docID, frequency, and position).
-// This is because all our coding methods use at least one word per integer encoded.
-#define MIN_COMPRESSED_CHUNK_SIZE (3 * sizeof(uint32_t))
+// The lower bound size of a single chunk in bytes (one integer per docID and frequency).
+// Note that this does not include an integer for the positions because we don't always index positions,
+// but we always have to include the docIDs and frequencies in an index.
+// Note that we could have a tighter bound here if we configured this dynamically;
+// we would then know if we could add another integer for the positions or not.
+// All our coding methods use at least one word per integer encoded.
+#define MIN_COMPRESSED_CHUNK_SIZE (2 * sizeof(uint32_t))
 
 // Maximum number of layers that can be part of a single inverted list.
 #define MAX_LIST_LAYERS 8
