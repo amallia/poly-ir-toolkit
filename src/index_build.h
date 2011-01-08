@@ -319,8 +319,7 @@ private:
 
   // The upper bound on the number of chunk properties in a block,
   // calculated by getting the max number of chunks in a block and multiplying by 2 properties per chunk.
-  static const int kChunkPropertiesUpperbound = 2 * (kBlockSize / kChunkSizeLowerBound); // TODO: having problem that this is too small...
-                                                                                         //       MIN_COMPRESSED_CHUNK_SIZE needs to be less when we don't index positions!
+  static const int kChunkPropertiesUpperbound = 2 * (kBlockSize / kChunkSizeLowerBound);
 
   // The upper bound on the number of chunk properties in a single block (sized for proper compression for various coding policies).
   static const int kChunkPropertiesCompressedUpperbound = CompressedOutBufferUpperbound(kChunkPropertiesUpperbound);
