@@ -148,8 +148,8 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   enum LayerSplitMode {
     kPercentage, kPercentageFixedBounded, kExponentiallyIncreasing
   };
-//  LayerSplitMode layer_splitting_strategy = kExponentiallyIncreasing;
-  LayerSplitMode layer_splitting_strategy = kPercentageFixedBounded;
+  LayerSplitMode layer_splitting_strategy = kExponentiallyIncreasing;
+//  LayerSplitMode layer_splitting_strategy = kPercentageFixedBounded;
 
   // If we have overlapping layers, should the threshold score include the overlapping documents?
   // This should generally be set to 'false', since all layers will then have the same threshold stored,
@@ -158,9 +158,9 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
   // Some dynamic index layer properties.
   // TODO: Should be able to define in configuration file.
-  int layer_percentages[] = { 5, 5, 10, 15, 25, 40 };
-  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0 };  // Set the max number of postings in each layer, 0 means no limit. Used for 'kPercentageFixedBounded'.
-  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768 };  // Set the min number of postings in each layer, 0 means no limit. Used for 'kExponentiallyIncreasing'.
+  int layer_percentages[] = { 5, 5, 10, 15, 25, 40, 0, 0 };
+  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0, 0, 0 };  // Set the max number of postings in each layer, 0 means no limit. Used for 'kPercentageFixedBounded'.
+  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072 };  // Set the min number of postings in each layer, 0 means no limit. Used for 'kExponentiallyIncreasing'.
 
   // Test that the index layering properties make sense.
   if (num_layers_ > kMaxLayers) {
