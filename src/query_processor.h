@@ -116,8 +116,6 @@ public:
 
   int IntersectLists(ListData** merge_lists, int num_merge_lists, ListData** lists, int num_lists, Result* results, int num_results);
 
-  int IntersectListsSimd(ListData** lists, int num_lists, Result* results, int num_results);
-
   int MergeLists(ListData** lists, int num_lists, uint32_t* merged_doc_ids, int max_merged_doc_ids);
   int MergeLists(ListData** lists, int num_lists, Result* results, int num_results);
   int MergeListsWand(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results, bool two_tiered);
