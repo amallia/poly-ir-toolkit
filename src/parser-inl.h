@@ -36,13 +36,16 @@
 #ifndef PARSERINL_H_
 #define PARSERINL_H_
 
+// Enables debugging output for this module.
+//#define PARSERINL_DEBUG
+
+#include <cstdlib>
 #include <cstring>
 
-///////TODO
+#ifdef PARSERINL_DEBUG
 #include <string>
 #include <iostream>
-#include <cstdlib>
-/////////
+#endif
 
 template<class Callback>
   Parser<Callback>::Parser(const Parser<Callback>::ParsingMode& parsing_mode, const Parser<Callback>::DocType& doc_type, Callback* callback) :
@@ -51,8 +54,8 @@ template<class Callback>
   }
 
 // Returns the number of documents parsed if parsing mode is set to 'MANY_DOC', otherwise 0.
-// Notes: The base URL can be set by a <base> tag within the page and by the Content-Location field in the web server's HTTP response header.
-// These cases are not currently covered.
+// TODO: The base URL can be set by a <base> tag within the page and by the Content-Location field in the web server's HTTP response header.
+//        These cases are not currently covered.
 template<class Callback>
   int Parser<Callback>::ParseDocumentCollection(const char* buf, int buf_len, uint32_t& doc_id, int& avg_doc_length) {
     assert(buf != NULL);
@@ -60,11 +63,10 @@ template<class Callback>
 
     int num_docs_parsed = 0;
 
-    const char* curr_p = buf; // Tracks the current point in the buffer.
+    const char* curr_p = buf;  // Tracks the current point in the buffer.
 
     if (doc_type_ == kWarc) {
       // The WARC format starts each bundle with some info lines, which we skip here.
-
       WarcHeader warc_header;
 
       curr_p += ProcessWarcHeader(buf, buf_len, curr_p, &warc_header);
@@ -78,19 +80,17 @@ template<class Callback>
 
         curr_p += header_bytes;
         const char* content_start = curr_p;
-//        curr_p += warc_header.content_length;
 
         num_docs_parsed += ParseBuffer(curr_p, warc_header.content_length, doc_id, avg_doc_length, curr_p);
-        std::cout << "num_docs_parsed: " << num_docs_parsed << std::endl;
+#ifdef PARSERINL_DEBUG
+        std::cout << "num WARC docs parsed: " << num_docs_parsed << std::endl;
+#endif
 
         // Since we're parsing one document at a time, we need to update the docID count, average doc length here.
         ++doc_id;
         ++num_docs_parsed;
 
-        std::cout << "curr_p - content_start" << (curr_p - content_start) << ", warc_header.content_length: " << warc_header.content_length << std::endl;
         assert(curr_p - content_start == warc_header.content_length);
-
-        std::cout << "NEXT HEADER" << std::endl;
       }
     } else {
       num_docs_parsed += ParseBuffer(buf, buf_len, doc_id, avg_doc_length, curr_p);
@@ -120,15 +120,11 @@ template<class Callback>
   bool in_docno = false;   // True when we're parsing contents of docno tag.
   bool in_dochdr = false;  // True when we're parsing contents of dochdr tag.
 
-
   // Track the starting point of various things we want to parse out.
   const char* word_p;        // Standalone word.
   const char* url_p;         // TREC document URL.
   const char* docno_p;       // TREC document number.
   const char* tag_p = NULL;  // Tracks the starting point of a tag; doubles as a flag as to whether we're currently in a tag.
-//  const char* curr_p = buf;  // Tracks the current point in the buffer.
-
-
 
   while (IsWithinBounds(curr_p, buf, buf_len)) {
     if (!IsIndexable(*curr_p)) {
@@ -436,8 +432,10 @@ template<class Callback>
             ++key_length;
           }
 
-          std::string key = std::string(key_start, key_length);
-          std::cout << "key: " << key << std::endl;
+#ifdef PARSERINL_DEBUG
+        std::string warc_key = std::string(key_start, key_length);
+        std::cout << "WARC key: " << warc_key << std::endl;
+#endif
 
           ++curr_p;
 
@@ -456,18 +454,19 @@ template<class Callback>
           const char kContentLengthStr[] = "Content-Length";
           const int kContentLengthStrLen = sizeof(kContentLengthStr) - 1;
 
-          std::string value = std::string(value_start, value_length);
-          std::cout << "value: " << value << std::endl;
+#ifdef PARSERINL_DEBUG
+        std::string warc_value = std::string(value_start, value_length);
+        std::cout << "WARC value: " << warc_value << std::endl;
+#endif
 
           // We need to know how long the document content is.
           if (key_length == kContentLengthStrLen && strncmp(key_start, kContentLengthStr, kContentLengthStrLen) == 0) {
-            char content_length_buf[11]; // Has to fit a 4 byte integer and a terminating null character.
+            char content_length_buf[11];  // Has to fit a 4 byte integer and a terminating null character.
             assert(value_length < 11);
             memcpy(content_length_buf, value_start, value_length);
             content_length_buf[value_length] = '\0';
             header->content_length = atoi(content_length_buf);
           }
-
         } else {
           ++curr_p; // Skips past the 'WARC/0.18' part.
         }

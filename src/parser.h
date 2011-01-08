@@ -26,7 +26,7 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// Code originally based on parser from search engines course.
+// Code originally based on parser from search engines course (although not much of it left).
 //==============================================================================================================================================================
 
 #ifndef PARSER_H_
@@ -76,7 +76,6 @@ template<class Callback>
 
     int ParseDocumentCollection(const char* buf, int buf_len, uint32_t& doc_id, int& avg_doc_length);
 
-    // TODO: Can make private.
     int ParseBuffer(const char* buf, int buf_len, uint32_t& doc_id, int& avg_doc_length, const char*& curr_p);
 
     Tag ProcessTag(const char* tag, int tag_len, bool& in_closing_tag, uint32_t doc_id);
