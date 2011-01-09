@@ -502,7 +502,7 @@ public:
 
   void InitLayers();
   void InitLayers(int num_layers, const int* num_docs, const int* num_chunks, const int* num_chunks_last_block, const int* num_blocks,
-                  const int* block_numbers, const int* chunk_numbers, const float* score_thresholds);
+                  const int* block_numbers, const int* chunk_numbers, const float* score_thresholds, const uint32_t* external_index_offsets);
 
   const char* term() const {
     return term_;
@@ -516,41 +516,94 @@ public:
     return num_layers_;
   }
 
-  const int* num_docs() const {
-    return num_docs_;
+  int layer_num_docs(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.num_docs;
+    } else {
+      return additional_layers_[layer_num - 1].num_docs;
+    }
   }
 
-  const int* num_chunks() const {
-    return num_chunks_;
+  int layer_num_chunks(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.num_chunks;
+    } else {
+      return additional_layers_[layer_num - 1].num_chunks;
+    }
   }
 
-  const int* num_chunks_last_block() const {
-    return num_chunks_last_block_;
+  int layer_num_chunks_last_block(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.num_chunks_last_block;
+    } else {
+      return additional_layers_[layer_num - 1].num_chunks_last_block;
+    }
   }
 
-  const int* num_blocks() const {
-    return num_blocks_;
+  int layer_num_blocks(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.num_blocks;
+    } else {
+      return additional_layers_[layer_num - 1].num_blocks;
+    }
   }
 
-  const int* block_numbers() const {
-    return block_numbers_;
+  int layer_block_number(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.block_number;
+    } else {
+      return additional_layers_[layer_num - 1].block_number;
+    }
   }
 
-  const int* chunk_numbers() const {
-    return chunk_numbers_;
+  int layer_chunk_number(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.chunk_number;
+    } else {
+      return additional_layers_[layer_num - 1].chunk_number;
+    }
   }
 
-  const float* score_thresholds() const {
-    return score_thresholds_;
+  float layer_score_threshold(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.score_threshold;
+    } else {
+      return additional_layers_[layer_num - 1].score_threshold;
+    }
   }
 
-  uint32_t* const * last_doc_ids() const {
-    return last_doc_ids_;
+  uint32_t layer_external_index_offset(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.external_index_offset;
+    } else {
+      return additional_layers_[layer_num - 1].external_index_offset;
+    }
+  }
+
+  const uint32_t* layer_last_doc_ids(int layer_num) const {
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      return first_layer_.last_doc_ids;
+    } else {
+      return additional_layers_[layer_num - 1].last_doc_ids;
+    }
   }
 
   void set_last_doc_ids_layer_ptr(uint32_t* last_doc_ids_layer, int layer_num) {
-    assert(layer_num < kMaxLayers);
-    last_doc_ids_[layer_num] = last_doc_ids_layer;
+    assert(layer_num < num_layers_);
+    if (layer_num == 0) {
+      first_layer_.last_doc_ids = last_doc_ids_layer;
+    } else {
+      additional_layers_[layer_num - 1].last_doc_ids = last_doc_ids_layer;
+    }
   }
 
   LexiconData* next() const {
@@ -565,20 +618,26 @@ private:
   int term_len_;  // The length of the 'term_', since it's not NULL terminated.
   char* term_;    // Pointer to the term this lexicon entry holds (it is not NULL terminated!).
 
-  const static int kMaxLayers = MAX_LIST_LAYERS;
-  int num_layers_;
+  int num_layers_;  // Number of layers this list consists of.
 
-  int num_docs_[kMaxLayers];               // The total number of documents in the inverted list layers for this term.
-  int num_chunks_[kMaxLayers];             // The total number of chunks in the inverted list layers for this term.
-  int num_chunks_last_block_[kMaxLayers];  // The number of chunks in the last block in the inverted list layers for this term.
-  int num_blocks_[kMaxLayers];             // The total number of blocks in the inverted list layers for this term.
-  int block_numbers_[kMaxLayers];          // The initial block numbers of the inverted list layers for this term.
-  int chunk_numbers_[kMaxLayers];          // The initial chunk numbers in the initial blocks of the inverted list layers for this term.
-  float score_thresholds_[kMaxLayers];     // The max BM25 document score in each inverted list layer for this term.
-  uint32_t* last_doc_ids_[kMaxLayers];     // For each layer, stores a pointer to an array of docIDs. The index into the array corresponds to the block number within the list
-                                           // and the docID is the last docID in the block for this inverted list.
+  // Holds the lexicon information for a single layer.
+  struct LayerInfo {
+    int num_docs;                    // The total number of documents in the inverted list layer for this term.
+    int num_chunks;                  // The total number of chunks in the inverted list layer for this term.
+    int num_chunks_last_block;       // The number of chunks in the last block in the inverted list layer for this term.
+    int num_blocks;                  // The total number of blocks in the inverted list layer for this term.
+    int block_number;                // The initial block number of the inverted list layer for this term.
+    int chunk_number;                // The initial chunk number in the initial block of the inverted list layer for this term.
+    float score_threshold;           // The max BM25 document score in the inverted list layer for this term.
+    uint32_t external_index_offset;  // The offset into the external index of the inverted list layer for this term.
+    uint32_t* last_doc_ids;          // A pointer to an array of docIDs. The index into the array corresponds to the block number within the inverted list layer
+                                     // and the docID is the last docID in the block for this inverted list.
+  };
 
-  LexiconData* next_;  // Pointer to the next lexicon entry.
+  LayerInfo first_layer_;            // Every list has at least one layer (and most will have only one). Any additional layers will be allocated dynamically.
+  LayerInfo* additional_layers_;     // Dynamically allocated for any additional layers.
+
+  LexiconData* next_;                // Pointer to the next lexicon entry.
 };
 
 /**************************************************************************************************************************************************************
@@ -587,7 +646,8 @@ private:
  * TODO: Would be wise to setup a large memory pool (we can even count during lexicon construction how many bytes we'll need). Then the LexiconData class
  *       can just take pointers to data in this memory pool without copying it (or just 1 pointer and decode it on the fly). This means variable sized data could be
  *       stored more compactly, without memory fragmentation. Best of all, we can adapt our decoding technique based on what data we stored in this memory pool;
- *       then we won't have to, say, store layered information if the index is only single layered.
+ *       then we won't have to, say, store layered information if the index is only single layered. This would only be necessary for when we read the whole
+ *       lexicon into main memory (not when merging).
  **************************************************************************************************************************************************************/
 class Lexicon {
 public:
@@ -622,6 +682,7 @@ private:
     int* block_numbers;
     int* chunk_numbers;
     float* score_thresholds;
+    uint32_t* external_index_offsets;
   };
 
   void GetNext(LexiconEntry* lexicon_entry);

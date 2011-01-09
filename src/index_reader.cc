@@ -211,50 +211,6 @@ int BlockDecoder::DecodeHeader(uint32_t* compressed_header) {
 }
 
 /**************************************************************************************************************************************************************
- * LexiconData
- *
- **************************************************************************************************************************************************************/
-const int LexiconData::kMaxLayers; // Initialized in the class definition.
-
-LexiconData::LexiconData(const char* term, int term_len) :
-  term_len_(term_len), term_(new char[term_len_]), num_layers_(0), next_(NULL) {
-  memcpy(term_, term, term_len);
-  InitLayers();
-}
-
-LexiconData::~LexiconData() {
-  delete[] term_;
-}
-
-void LexiconData::InitLayers() {
-  for (int i = 0; i < kMaxLayers; ++i) {
-    num_docs_[i] = 0;
-    num_chunks_[i] = 0;
-    num_chunks_last_block_[i] = 0;
-    num_blocks_[i] = 0;
-    block_numbers_[i] = 0;
-    chunk_numbers_[i] = 0;
-    score_thresholds_[i] = 0.0f;
-    last_doc_ids_[i] = NULL;
-  }
-}
-
-void LexiconData::InitLayers(int num_layers, const int* num_docs, const int* num_chunks, const int* num_chunks_last_block, const int* num_blocks,
-                             const int* block_numbers, const int* chunk_numbers, const float* score_thresholds) {
-  num_layers_ = num_layers;
-  for (int i = 0; i < num_layers_; ++i) {
-    num_docs_[i] = num_docs[i];
-    num_chunks_[i] = num_chunks[i];
-    num_chunks_last_block_[i] = num_chunks_last_block[i];
-    num_blocks_[i] = num_blocks[i];
-    block_numbers_[i] = block_numbers[i];
-    chunk_numbers_[i] = chunk_numbers[i];
-    score_thresholds_[i] = score_thresholds[i];
-    last_doc_ids_[i] = NULL;
-  }
-}
-
-/**************************************************************************************************************************************************************
  * ListData
  *
  **************************************************************************************************************************************************************/
@@ -461,14 +417,69 @@ void ListData::AdvanceChunk() {
 }
 
 /**************************************************************************************************************************************************************
+ * LexiconData
+ *
+ **************************************************************************************************************************************************************/
+LexiconData::LexiconData(const char* term, int term_len) :
+  term_len_(term_len),
+  term_(new char[term_len_]),
+  num_layers_(0),
+  additional_layers_(NULL),
+  next_(NULL) {
+  memcpy(term_, term, term_len);
+}
+
+LexiconData::~LexiconData() {
+  delete[] term_;
+}
+
+void LexiconData::InitLayers(int num_layers, const int* num_docs, const int* num_chunks, const int* num_chunks_last_block, const int* num_blocks,
+                             const int* block_numbers, const int* chunk_numbers, const float* score_thresholds, const uint32_t* external_index_offsets) {
+  assert(num_layers > 0);
+
+  num_layers_ = num_layers;
+
+  // Initialize the data for the first layer.
+  first_layer_.num_docs = num_docs[0];
+  first_layer_.num_chunks = num_chunks[0];
+  first_layer_.num_chunks_last_block = num_chunks_last_block[0];
+  first_layer_.num_blocks = num_blocks[0];
+  first_layer_.block_number = block_numbers[0];
+  first_layer_.chunk_number = chunk_numbers[0];
+  first_layer_.score_threshold = score_thresholds[0];
+  first_layer_.external_index_offset = external_index_offsets[0];
+  first_layer_.last_doc_ids = NULL;
+
+  if (num_layers_ > 1) {
+    additional_layers_ = new LayerInfo[num_layers_ - 1];
+    for (int i = 1; i < num_layers_; ++i) {
+      additional_layers_[i].num_docs = num_docs[i];
+      additional_layers_[i].num_chunks = num_chunks[i];
+      additional_layers_[i].num_chunks_last_block = num_chunks_last_block[i];
+      additional_layers_[i].num_blocks = num_blocks[i];
+      additional_layers_[i].block_number = block_numbers[i];
+      additional_layers_[i].chunk_number = chunk_numbers[i];
+      additional_layers_[i].score_threshold = score_thresholds[i];
+      additional_layers_[i].external_index_offset = external_index_offsets[i];
+      additional_layers_[i].last_doc_ids = NULL;
+    }
+  }
+}
+
+/**************************************************************************************************************************************************************
  * Lexicon
  *
  * Reads the lexicon file in smallish chunks and inserts entries into an in-memory hash table (when querying) or returns the next sequential entry (when
  * merging).
  **************************************************************************************************************************************************************/
 Lexicon::Lexicon(int hash_table_size, const char* lexicon_filename, bool random_access) :
-  lexicon_(random_access ? new MoveToFrontHashTable<LexiconData> (hash_table_size) : NULL), kLexiconBufferSize(1 << 20),
-      lexicon_buffer_(new char[kLexiconBufferSize]), lexicon_buffer_ptr_(lexicon_buffer_), lexicon_fd_(-1), lexicon_file_size_(0), num_bytes_read_(0) {
+  lexicon_(random_access ? new MoveToFrontHashTable<LexiconData> (hash_table_size) : NULL),
+  kLexiconBufferSize(1 << 20),
+  lexicon_buffer_(new char[kLexiconBufferSize]),
+  lexicon_buffer_ptr_(lexicon_buffer_),
+  lexicon_fd_(-1),
+  lexicon_file_size_(0),
+  num_bytes_read_(0) {
   Open(lexicon_filename, random_access);
 }
 
@@ -507,7 +518,8 @@ void Lexicon::Open(const char* lexicon_filename, bool random_access) {
 
       LexiconData* lex_data = lexicon_->Insert(lexicon_entry.term, lexicon_entry.term_len);
       lex_data->InitLayers(lexicon_entry.num_layers, lexicon_entry.num_docs, lexicon_entry.num_chunks, lexicon_entry.num_chunks_last_block,
-                           lexicon_entry.num_blocks, lexicon_entry.block_numbers, lexicon_entry.chunk_numbers, lexicon_entry.score_thresholds);
+                           lexicon_entry.num_blocks, lexicon_entry.block_numbers, lexicon_entry.chunk_numbers, lexicon_entry.score_thresholds,
+                           lexicon_entry.external_index_offsets);
 
       ++num_terms;
     }
@@ -532,7 +544,8 @@ LexiconData* Lexicon::GetNextEntry() {
     GetNext(&lexicon_entry);
     LexiconData* lex_data = new LexiconData(lexicon_entry.term, lexicon_entry.term_len);
     lex_data->InitLayers(lexicon_entry.num_layers, lexicon_entry.num_docs, lexicon_entry.num_chunks, lexicon_entry.num_chunks_last_block,
-                         lexicon_entry.num_blocks, lexicon_entry.block_numbers, lexicon_entry.chunk_numbers, lexicon_entry.score_thresholds);
+                         lexicon_entry.num_blocks, lexicon_entry.block_numbers, lexicon_entry.chunk_numbers, lexicon_entry.score_thresholds,
+                         lexicon_entry.external_index_offsets);
     return lex_data;
   } else {
     delete [] lexicon_buffer_;
@@ -550,7 +563,7 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
   // This just counts a lower bound, as if the number of layers was only one.
   const int kLexiconEntryLayerDependentFieldsBytes = (sizeof(*lexicon_entry->num_docs) + sizeof(*lexicon_entry->num_chunks)
       + sizeof(*lexicon_entry->num_chunks_last_block) + sizeof(*lexicon_entry->num_blocks) + sizeof(*lexicon_entry->block_numbers)
-      + sizeof(*lexicon_entry->chunk_numbers) + sizeof(*lexicon_entry->score_thresholds));
+      + sizeof(*lexicon_entry->chunk_numbers) + sizeof(*lexicon_entry->score_thresholds) + sizeof(*lexicon_entry->external_index_offsets));
 
   // We definitely need to load more data in this case.
   if (lexicon_buffer_ptr_ + (kLexiconEntryFixedLengthFieldsBytes + kLexiconEntryLayerDependentFieldsBytes) > lexicon_buffer_ + kLexiconBufferSize) {
@@ -658,6 +671,15 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
   lexicon_buffer_ptr_ += score_thresholds_bytes;
   num_bytes_read_ += score_thresholds_bytes;
 
+  // external_index_offsets
+  uint32_t* external_index_offsets = reinterpret_cast<uint32_t*> (lexicon_buffer_ptr_);
+/*  int external_index_offsets_bytes = num_layers * sizeof(*external_index_offsets);
+  assert((lexicon_buffer_ptr_+external_index_offsets_bytes) <= (lexicon_buffer_ + kLexiconBufferSize));
+  lexicon_buffer_ptr_ += external_index_offsets_bytes;
+  num_bytes_read_ += external_index_offsets_bytes;
+*///TODO: ENABLE!!!!!!
+
+
   lexicon_entry->term = term;
   lexicon_entry->term_len = term_len;
   lexicon_entry->num_layers = num_layers;
@@ -668,6 +690,7 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
   lexicon_entry->block_numbers = block_numbers;
   lexicon_entry->chunk_numbers = chunk_numbers;
   lexicon_entry->score_thresholds = score_thresholds;
+  lexicon_entry->external_index_offsets = external_index_offsets;
 }
 
 /**************************************************************************************************************************************************************
@@ -708,32 +731,31 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
 }
 
 ListData* IndexReader::OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query) {
-  assert(lex_data.block_numbers()[layer_num] >= 0 && lex_data.chunk_numbers()[layer_num] >= 0 && lex_data.num_docs()[layer_num] >= 0);
+  assert(lex_data.layer_block_number(layer_num) >= 0 && lex_data.layer_chunk_number(layer_num) >= 0 && lex_data.layer_num_docs(layer_num) >= 0);
 
-  // TODO:
-  // If there are errors reading the values for these keys (most likely missing value), we assume they're false
+  // TODO: If there are errors reading the values for these keys (most likely missing value), we assume they're false
   // (because that would require updating the index meta file generation in some places, which should be done eventually).
   KeyValueStore::KeyValueResult<long int> overlapping_layers_res = meta_info_.GetNumericalValue(meta_properties::kOverlappingLayers);
   bool overlapping_layers = overlapping_layers_res.error() ? false : overlapping_layers_res.value_t();
 
   int num_docs_complete_list = 0; // Need to find the total number of documents for the whole list, to be used in the BM25 score calculation.
   if (overlapping_layers) {
-    num_docs_complete_list = lex_data.num_docs()[lex_data.num_layers() - 1];
+    num_docs_complete_list = lex_data.layer_num_docs(lex_data.num_layers() - 1);
   } else {
     for (int i = 0; i < lex_data.num_layers(); ++i) {
-      num_docs_complete_list += lex_data.num_docs()[i];
+      num_docs_complete_list += lex_data.layer_num_docs(i);
     }
   }
 
   ListData* list_data = new ListData(layer_num,
-                                     lex_data.block_numbers()[layer_num],
-                                     lex_data.chunk_numbers()[layer_num],
-                                     lex_data.num_docs()[layer_num],
+                                     lex_data.layer_block_number(layer_num),
+                                     lex_data.layer_chunk_number(layer_num),
+                                     lex_data.layer_num_docs(layer_num),
                                      num_docs_complete_list,
-                                     lex_data.num_chunks_last_block()[layer_num],
-                                     lex_data.num_blocks()[layer_num],
-                                     lex_data.last_doc_ids()[layer_num],
-                                     lex_data.score_thresholds()[layer_num],
+                                     lex_data.layer_num_chunks_last_block(layer_num),
+                                     lex_data.layer_num_blocks(layer_num),
+                                     lex_data.layer_last_doc_ids(layer_num),
+                                     lex_data.layer_score_threshold(layer_num),
                                      cache_manager_,
                                      doc_id_decompressor_,
                                      frequency_decompressor_,
