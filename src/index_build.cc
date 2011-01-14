@@ -38,7 +38,6 @@
 #include <cerrno>
 #include <cstring>
 
-#include <iostream>//TODO
 #include <limits>
 
 #include <fcntl.h>
@@ -62,12 +61,16 @@ using namespace std;
 const int InvertedListMetaData::kMaxLayers;  // Initialized in the class definition.
 
 InvertedListMetaData::InvertedListMetaData() :
-  term_(NULL), term_len_(0), num_layers_(0) {
+  term_(NULL),
+  term_len_(0),
+  num_layers_(0) {
   Init();
 }
 
 InvertedListMetaData::InvertedListMetaData(const char* term, int term_len) :
-  term_(new char[term_len]), term_len_(term_len), num_layers_(0) {
+  term_(new char[term_len]),
+  term_len_(term_len),
+  num_layers_(0) {
   memcpy(term_, term, term_len);
   Init();
 }
@@ -85,6 +88,7 @@ void InvertedListMetaData::Init() {
     block_numbers_[i] = 0;
     chunk_numbers_[i] = 0;
     score_thresholds_[i] = 0.0f;
+    external_index_offsets_[i] = 0;
   }
 }
 
@@ -171,7 +175,6 @@ BlockEncoder::BlockEncoder(const CodingPolicy& block_header_compressor) :
   block_header_compressor_(block_header_compressor),
   block_header_size_(0),
   num_chunks_(0),
-  block_max_score_(-numeric_limits<float>::max()),
   block_data_offset_(0),
   chunk_properties_uncompressed_size_(UncompressedInBufferUpperbound(kChunkPropertiesUpperbound, block_header_compressor_.block_size())),
   chunk_properties_uncompressed_(new uint32_t[chunk_properties_uncompressed_size_]),
@@ -209,15 +212,14 @@ bool BlockEncoder::AddChunk(const ChunkEncoder& chunk) {
 
   int block_header_size = sizeof(block_header_size_);
   int num_chunks_size = sizeof(num_chunks);
-  int block_max_score_size = sizeof(block_max_score_);
 
-  int curr_block_header_size = block_header_size + num_chunks_size + block_max_score_size + CompressedOutBufferUpperbound((kNumHeaderInts * sizeof(uint32_t)));  // Upper bound with 'chunk' included.
+  int curr_block_header_size = block_header_size + num_chunks_size + CompressedOutBufferUpperbound((kNumHeaderInts * sizeof(uint32_t)));  // Upper bound with 'chunk' included.
   int curr_block_data_size = (block_data_offset_ + chunk.size()) * sizeof(uint32_t);
   int upper_bound_block_size = curr_block_data_size + curr_block_header_size;
 
   if (upper_bound_block_size > kBlockSize) {
     int curr_chunk_properties_compressed_len = CompressHeader(chunk_properties_uncompressed_, chunk_properties_compressed_, kNumHeaderInts);
-    if ((curr_block_data_size + block_header_size + num_chunks_size + block_max_score_size + (curr_chunk_properties_compressed_len * static_cast<int> (sizeof(*chunk_properties_compressed_)))) <= kBlockSize) {
+    if ((curr_block_data_size + block_header_size + num_chunks_size + (curr_chunk_properties_compressed_len * static_cast<int> (sizeof(*chunk_properties_compressed_)))) <= kBlockSize) {
       chunk_properties_compressed_len_ = curr_chunk_properties_compressed_len;
       block_header_size_ = sizeof(num_chunks_) + chunk_properties_compressed_len_ * sizeof(*chunk_properties_compressed_);
     } else {
@@ -236,11 +238,6 @@ bool BlockEncoder::AddChunk(const ChunkEncoder& chunk) {
 
   // Chunk fits into this block, so copy chunk data to this block.
   CopyChunkData(chunk);
-
-  // Update the max score in this block.
-  if (chunk.max_score() > block_max_score_) {
-    block_max_score_ = chunk.max_score();
-  }
 
   ++num_chunks_;
   return true;
@@ -304,7 +301,7 @@ void BlockEncoder::CopyChunkData(const ChunkEncoder& chunk) {
 void BlockEncoder::Finalize() {
   const int kNumHeaderInts = 2 * num_chunks_;
   chunk_properties_compressed_len_ = CompressHeader(chunk_properties_uncompressed_, chunk_properties_compressed_, kNumHeaderInts);
-  block_header_size_ = sizeof(num_chunks_) + sizeof(block_max_score_) + chunk_properties_compressed_len_ * sizeof(*chunk_properties_compressed_);
+  block_header_size_ = sizeof(num_chunks_) + chunk_properties_compressed_len_ * sizeof(*chunk_properties_compressed_);
 }
 
 // The 'header' array size needs to be a multiple of the block size used by the block header compressor.
@@ -334,13 +331,6 @@ void BlockEncoder::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len
   num_bytes = sizeof(num_chunks_);
   assert(block_bytes_offset + num_bytes <= block_bytes_len);
   memcpy(block_bytes + block_bytes_offset, &num_chunks_, num_bytes);
-  block_bytes_offset += num_bytes;
-  num_block_header_bytes_ += num_bytes;
-
-  // Maximum docID score in the block.
-  num_bytes = sizeof(block_max_score_);
-  assert(block_bytes_offset + num_bytes <= block_bytes_len);
-  memcpy(block_bytes + block_bytes_offset, &block_max_score_, num_bytes);
   block_bytes_offset += num_bytes;
   num_block_header_bytes_ += num_bytes;
 
@@ -382,6 +372,7 @@ IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filen
   lexicon_offset_(0),
   lexicon_fd_(open(lexicon_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
   block_header_compressor_(block_header_compressor),
+  external_index_builder_("index.ext"),
   total_num_chunks_(0),
   total_num_per_term_blocks_(0),
   num_unique_terms_(0),
@@ -423,6 +414,9 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
   if (!curr_block_->AddChunk(chunk)) {
     block_added = true;
 
+    // Starts a new block for the external index builder.
+    external_index_builder_.NewBlock();
+
     // Reset chunk counter and increase block counter.
     ++curr_block_number_;
     curr_chunk_number_ = 0;
@@ -438,10 +432,12 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
     }
   }
 
+  // Send the chunk to the external index builder for further processing.
+  external_index_builder_.AddChunk(chunk);
+
   InvertedListMetaData* curr_lexicon_entry = ((lexicon_offset_ == 0) ? NULL : lexicon_[lexicon_offset_ - 1]);
   if (curr_lexicon_entry == NULL || (curr_lexicon_entry->term_len() != term_len
       || strncasecmp(curr_lexicon_entry->term(), term, curr_lexicon_entry->term_len()) != 0)) {
-
     if (curr_lexicon_entry && curr_lexicon_entry->num_layers() == 0) {
       // Must do this in case we're dealing with a non-layered index.
       // We have to set the number of layers to one before we're done with this lexicon entry.
@@ -454,6 +450,9 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
       WriteLexicon();
     }
 
+    // External index builder must end the previous list (if any) and update the offset for the start of the new list.
+    external_index_builder_.NewList();
+
     // This chunk belongs to a new term, so we have to insert it into the lexicon.
     InvertedListMetaData* new_lexicon_entry = new InvertedListMetaData(term, term_len);
     new_lexicon_entry->set_curr_layer_num_docs(chunk.num_docs());
@@ -461,6 +460,7 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
     new_lexicon_entry->increase_curr_layer_num_chunks(1);
     new_lexicon_entry->set_curr_layer_num_chunks_last_block(1);
     new_lexicon_entry->increase_curr_layer_num_blocks(1);
+    new_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_.curr_offset());
     lexicon_[lexicon_offset_++] = new_lexicon_entry;
 
     insert_layer_offset_ = false;  // This covers the case when we are making a layered index, but we turned on the flag for the last layer.
@@ -492,6 +492,7 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
       }
 
       curr_lexicon_entry->set_curr_layer_offset(curr_block_number_, curr_chunk_number_);
+      curr_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_.curr_offset());
       insert_layer_offset_ = false;
     }
   }
@@ -547,6 +548,11 @@ void IndexBuilder::FinalizeLayer(float score_threshold) {
   curr_lexicon_entry->set_curr_layer_threshold(score_threshold);  // Set the threshold for the current layer.
 
   curr_lexicon_entry->increase_curr_layer();  // Move on to the next layer now.
+
+  // External index builder must end the previous layer and update the offset for the start of the new layer.
+  // Note that a layer is viewed as just another list.
+  external_index_builder_.NewList();
+
   insert_layer_offset_ = true;
 }
 
@@ -601,8 +607,12 @@ void IndexBuilder::WriteLexicon() {
     const float* score_thresholds = lexicon_entry->score_thresholds();
     int score_thresholds_bytes = num_layers * sizeof(*score_thresholds);
 
+    // external_index_offsets
+    const uint32_t* external_index_offsets = lexicon_entry->external_index_offsets();
+    int external_index_offsets_bytes = num_layers * sizeof(*external_index_offsets);
+
     int total_bytes = term_len_bytes + term_bytes + num_layers_bytes + num_docs_bytes + num_chunks_bytes + num_chunks_last_block_bytes + num_blocks_bytes
-        + block_numbers_bytes + chunk_numbers_bytes + score_thresholds_bytes;
+        + block_numbers_bytes + chunk_numbers_bytes + score_thresholds_bytes + external_index_offsets_bytes;
     if(total_bytes > kLexiconBufferSize) {
       // Indicates the term is very long.
       // Probably should prune such long terms in the first place, but...
@@ -642,6 +652,9 @@ void IndexBuilder::WriteLexicon() {
 
       write_ret = write(lexicon_fd_, score_thresholds, score_thresholds_bytes);
       assert(write_ret == score_thresholds_bytes);
+
+      write_ret = write(lexicon_fd_, external_index_offsets, external_index_offsets_bytes);
+      assert(write_ret == external_index_offsets_bytes);
 
       continue;
     }
@@ -696,6 +709,10 @@ void IndexBuilder::WriteLexicon() {
     // score_thresholds
     memcpy(lexicon_data + lexicon_data_offset, score_thresholds, score_thresholds_bytes);
     lexicon_data_offset += score_thresholds_bytes;
+
+    // external_index_offsets
+    memcpy(lexicon_data + lexicon_data_offset, external_index_offsets, external_index_offsets_bytes);
+    lexicon_data_offset += external_index_offsets_bytes;
 
     delete lexicon_entry;
   }

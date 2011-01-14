@@ -36,11 +36,10 @@
 #include <cassert>
 #include <stdint.h>
 
-#include <vector>
-
 #include "coding_policy.h"
 #include "coding_policy_helper.h"
 #include "configuration.h"
+#include "external_index.h"
 #include "index_layout_parameters.h"
 
 /**************************************************************************************************************************************************************
@@ -95,6 +94,10 @@ public:
 
   const float* score_thresholds() const {
     return score_thresholds_;
+  }
+
+  const uint32_t* external_index_offsets() const {
+    return external_index_offsets_;
   }
 
   void increase_curr_layer() {
@@ -152,13 +155,18 @@ public:
     score_thresholds_[num_layers_] = score_threshold;
   }
 
+  void set_curr_layer_external_index_offset(uint32_t index_offset) {
+    assert(num_layers_ < kMaxLayers);
+    external_index_offsets_[num_layers_] = index_offset;
+  }
+
 private:
   void Init();
 
   char* term_;
   int term_len_;
 
-  const static int kMaxLayers = MAX_LIST_LAYERS;
+  const static int kMaxLayers = MAX_LIST_LAYERS;  // The max number of layers we support.
   int num_layers_;                                // Used to keep track of the current layer we're processing info for; at the end, will hold the number of layers we have for a particular inverted list.
   int num_docs_[kMaxLayers];
   int num_chunks_[kMaxLayers];
@@ -167,6 +175,7 @@ private:
   int block_numbers_[kMaxLayers];
   int chunk_numbers_[kMaxLayers];
   float score_thresholds_[kMaxLayers];            // If our index is only single layered throughout, this field is not useful, so we can save some memory and not load it.
+  uint32_t external_index_offsets_[kMaxLayers];   // The integer offset into the external index where data for the current term layer starts.
 };
 
 /**************************************************************************************************************************************************************
@@ -285,10 +294,6 @@ public:
     return num_chunks_;
   }
 
-  void set_block_max_score(float block_max_score) {
-    block_max_score_ = block_max_score;
-  }
-
   int num_block_header_bytes() const {
     return num_block_header_bytes_;
   }
@@ -328,7 +333,6 @@ private:
 
   uint32_t block_header_size_;  // The size of the block header including the number of chunks; determined in 'Finalize()'.
   uint32_t num_chunks_;         // The number of chunks contained within this block.
-  float block_max_score_;       // The maximum docID score within this block.
 
   uint32_t block_data_[kBlockSize / sizeof(uint32_t)];  // The compressed chunk data.
   int block_data_offset_;                               // Current offset within the 'block_data_'.
@@ -424,6 +428,8 @@ private:
   int lexicon_fd_;
 
   const CodingPolicy& block_header_compressor_;
+
+  ExternalIndexBuilder external_index_builder_;
 
   // Used to build an in-memory block header index during query processing (when the index is loaded into main memory).
   uint64_t total_num_chunks_;           // The total number of chunks in this index.
