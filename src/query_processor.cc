@@ -199,7 +199,7 @@ void QueryProcessor::BuildBlockLevelIndex() {
       for (int i = 0; i < num_layers; ++i) {
         ListData* list_data = index_reader_.OpenList(*curr_term_entry, i, true);
 
-        int num_chunks_left = curr_term_entry->num_chunks()[i];
+        int num_chunks_left = curr_term_entry->layer_num_chunks(i);
 
         assert(block_level_index_pos < num_per_term_blocks);
         curr_term_entry->set_last_doc_ids_layer_ptr(block_level_index + block_level_index_pos, i);
@@ -331,7 +331,7 @@ void QueryProcessor::OpenListLayers(LexiconData** query_term_data, int num_query
 
         if (!silent_mode_)
           cout << "Score threshold for list '" << string(query_term_data[i]->term(), query_term_data[i]->term_len()) << "', layer #" << j << " is: "
-              << query_term_data[i]->score_thresholds()[j] << ", num_docs: " << query_term_data[i]->num_docs()[j] << "\n";
+              << query_term_data[i]->layer_score_threshold(j) << ", num_docs: " << query_term_data[i]->layer_num_docs(j) << "\n";
       } else {
         // For any remaining layers we don't have, we just open up the last layer.
         list_data_pointers[i][j] = index_reader_.OpenList(*query_term_data[i], query_term_data[i]->num_layers() - 1, *single_term_query, i);
@@ -1052,7 +1052,7 @@ int QueryProcessor::ProcessLayeredQuery(LexiconData** query_term_data, int num_q
       Result& min_result = results[min(kMaxNumResults - 1, *num_results - 1)];
       float remaining_document_score_upperbound = 0;
       for (int i = 0; i < num_query_terms; ++i) {
-        float bm25_partial_score = query_term_data[i]->score_thresholds()[query_term_data[i]->num_layers() - 1];
+        float bm25_partial_score = query_term_data[i]->layer_score_threshold(query_term_data[i]->num_layers() - 1);
         assert(!isnan(bm25_partial_score));
         remaining_document_score_upperbound += bm25_partial_score;
       }
