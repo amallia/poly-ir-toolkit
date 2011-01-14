@@ -32,15 +32,21 @@
 #ifndef INDEX_READER_H_
 #define INDEX_READER_H_
 
+// Enables debugging output for this module.
+#define INDEX_READER_DEBUG
+
 #include <cassert>
 #include <stdint.h>
 
-#include <iostream>//TODO
+#ifdef INDEX_READER_DEBUG
+#include <iostream>
+#endif
 
 #include "cache_manager.h"
 #include "coding_policy.h"
 #include "coding_policy_helper.h"
 #include "document_map.h"
+#include "external_index.h"
 #include "index_configuration.h"
 #include "index_layout_parameters.h"
 #include "term_hash_table.h"
@@ -230,6 +236,10 @@ public:
     return block_max_score_;
   }
 
+  void set_block_max_score(float block_max_score) {
+    block_max_score_ = block_max_score;
+  }
+
   // Returns the actual number of chunks stored in this block, that are actually part of the inverted list for this particular term.
   int num_actual_chunks() const {
     return num_chunks_ - starting_chunk_;
@@ -284,15 +294,13 @@ private:
  * ListData
  *
  * Used by the IndexReader during list traversal to hold current state of the list we're traversing.
- *
- * TODO: Doing a bunch of stuff here...clean up later!
  **************************************************************************************************************************************************************/
 class ListData {
 public:
   ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
            int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
            const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor,
-           bool single_term_query);
+           uint32_t external_index_offset, const ExternalIndexReader& external_index_reader, bool single_term_query);
   ~ListData();
 
   void FreeQueuedBlocks();
@@ -380,11 +388,7 @@ public:
     prev_block_last_doc_id_ = doc_id;
   }
 
-  // TODO: can we just set the initial/final block when we load it, instead of doing a branching test every time in here??? think so!
-
   bool initial_block() const {
-//    return (curr_block_num_ == initial_block_num_) ? true : false;
-
     return (num_blocks_left_ == num_blocks_) ? true : false;
   }
 
@@ -398,8 +402,6 @@ public:
 
   bool has_more() const {
     return num_blocks_left_ != 0 && num_chunks_last_block_left_ != 0;
-
-//    return !final_block() || !final_chunk();
   }
 
   int term_num() const {
@@ -433,8 +435,6 @@ private:
 
   void SkipToBlock(uint32_t skip_to_block_idx);
 
-  // TODO: changing all the 64-bit block numbers to 32-bit...Should make these changes across the cache manager too.
-
   const int kNumLeftoverDocs;        // The uneven number of documents that spilled over into the last chunk of the list.
                                      // (that is, they couldn't be evenly divided by the standard amount of documents in a full chunk).
   const int kReadAheadBlocks;        // The number of blocks we want to read ahead into the cache. TODO: Now that we know how many blocks we have per list --- we can be exact about this.
@@ -463,7 +463,6 @@ private:
   int num_docs_left_;                // The number of documents we have left to traverse in this inverted list (it could be negative by the end).
                                      // Only updated after NextGEQ() finishes with a chunk and moves on to the next one.
                                      // Updated and used by the IndexReader in NextGEQ().
-
   int num_chunks_last_block_left_;   //
   int num_blocks_left_;              //
   bool first_block_loaded_;          //
@@ -479,6 +478,9 @@ private:
   uint32_t last_queued_block_num_;   // The last block number that was not yet queued for transfer.
 
   int term_num_;                     // May be used by the query processor to map this object back to the term it corresponds to.
+
+  ExternalIndexReader::ExternalIndexPointer external_index_pointer_;
+  const ExternalIndexReader& external_index_reader_;
 
   bool single_term_query_;           // A hint from an external source that allows us to optimize list traversal if we know that we'll never be doing any list skipping.
 
@@ -726,8 +728,6 @@ public:
 
   uint32_t NextGEQ(ListData* list_data, uint32_t doc_id);
 
-  uint32_t NextGEQOld(ListData* list_data, uint32_t doc_id);
-
   float GetBlockScoreBound(ListData* list_data);
 
   uint32_t NextGEQScore(ListData* list_data, float min_score);
@@ -819,6 +819,8 @@ private:
   bool includes_contexts_;             // True if the index contains context data.
   bool includes_positions_;            // True if the index contains position data.
   bool use_positions_;                 // A hint from an external source that allows us to speed up processing a bit if it doesn't require positions.
+
+  ExternalIndexReader external_index_reader_;
 
   // Decompressors for various portions of the index.
   CodingPolicy doc_id_decompressor_;
