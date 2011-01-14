@@ -33,20 +33,12 @@
 #include <cerrno>
 #include <cstring>
 
-#include <iostream>//TODO
-#include <limits>
-
 #include <fcntl.h>
-#include <strings.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
-#include <sys/time.h>
 #include <sys/types.h>
 #include <unistd.h>
 
-#include "config_file_properties.h"
 #include "globals.h"
-#include "index_layout_parameters.h"
 #include "logger.h"
 using namespace std;
 

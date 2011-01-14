@@ -84,13 +84,7 @@
 
 #include <cassert>
 #include <stdint.h>
-
-#include <vector>
-
-#include "coding_policy.h"
-#include "coding_policy_helper.h"
-#include "configuration.h"
-#include "index_layout_parameters.h"
+#include <cstdlib>
 
 /**************************************************************************************************************************************************************
  * DocumentDynamicEntriesPool
