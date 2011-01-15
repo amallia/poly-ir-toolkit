@@ -49,6 +49,7 @@
 #include <unistd.h>
 
 #include "config_file_properties.h"
+#include "external_index.h"
 #include "globals.h"
 #include "index_layout_parameters.h"
 #include "logger.h"
@@ -358,7 +359,8 @@ void BlockEncoder::GetBlockBytes(unsigned char* block_bytes, int block_bytes_len
  *
  * TODO: Don't need to create new BlockEncoders every time. Just allocate array of BlockEncoders that you can then reset.
  **************************************************************************************************************************************************************/
-IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filename, const CodingPolicy& block_header_compressor) :
+IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filename, const CodingPolicy& block_header_compressor,
+                           ExternalIndexBuilder* external_index_builder) :
   kBlocksBufferSize(64),
   blocks_buffer_(new BlockEncoder*[kBlocksBufferSize]),
   blocks_buffer_offset_(0),
@@ -372,7 +374,7 @@ IndexBuilder::IndexBuilder(const char* lexicon_filename, const char* index_filen
   lexicon_offset_(0),
   lexicon_fd_(open(lexicon_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
   block_header_compressor_(block_header_compressor),
-  external_index_builder_("index.ext"),
+  external_index_builder_(external_index_builder),
   total_num_chunks_(0),
   total_num_per_term_blocks_(0),
   num_unique_terms_(0),
@@ -414,8 +416,10 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
   if (!curr_block_->AddChunk(chunk)) {
     block_added = true;
 
-    // Starts a new block for the external index builder.
-    external_index_builder_.NewBlock();
+    if (external_index_builder_ != NULL) {
+      // Starts a new block for the external index builder.
+      external_index_builder_->NewBlock();
+    }
 
     // Reset chunk counter and increase block counter.
     ++curr_block_number_;
@@ -432,8 +436,10 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
     }
   }
 
-  // Send the chunk to the external index builder for further processing.
-  external_index_builder_.AddChunk(chunk);
+  if (external_index_builder_ != NULL) {
+    // Send the chunk to the external index builder for further processing.
+    external_index_builder_->AddChunk(chunk);
+  }
 
   InvertedListMetaData* curr_lexicon_entry = ((lexicon_offset_ == 0) ? NULL : lexicon_[lexicon_offset_ - 1]);
   if (curr_lexicon_entry == NULL || (curr_lexicon_entry->term_len() != term_len
@@ -450,8 +456,10 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
       WriteLexicon();
     }
 
-    // External index builder must end the previous list (if any) and update the offset for the start of the new list.
-    external_index_builder_.NewList();
+    if (external_index_builder_ != NULL) {
+      // External index builder must end the previous list (if any) and update the offset for the start of the new list.
+      external_index_builder_->NewList();
+    }
 
     // This chunk belongs to a new term, so we have to insert it into the lexicon.
     InvertedListMetaData* new_lexicon_entry = new InvertedListMetaData(term, term_len);
@@ -460,7 +468,8 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
     new_lexicon_entry->increase_curr_layer_num_chunks(1);
     new_lexicon_entry->set_curr_layer_num_chunks_last_block(1);
     new_lexicon_entry->increase_curr_layer_num_blocks(1);
-    new_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_.curr_offset());
+    if (external_index_builder_ != NULL)
+      new_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_->curr_offset());
     lexicon_[lexicon_offset_++] = new_lexicon_entry;
 
     insert_layer_offset_ = false;  // This covers the case when we are making a layered index, but we turned on the flag for the last layer.
@@ -492,7 +501,8 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
       }
 
       curr_lexicon_entry->set_curr_layer_offset(curr_block_number_, curr_chunk_number_);
-      curr_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_.curr_offset());
+      if (external_index_builder_ != NULL)
+        curr_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_->curr_offset());
       insert_layer_offset_ = false;
     }
   }
@@ -549,9 +559,11 @@ void IndexBuilder::FinalizeLayer(float score_threshold) {
 
   curr_lexicon_entry->increase_curr_layer();  // Move on to the next layer now.
 
-  // External index builder must end the previous layer and update the offset for the start of the new layer.
-  // Note that a layer is viewed as just another list.
-  external_index_builder_.NewList();
+  if (external_index_builder_ != NULL) {
+    // External index builder must end the previous layer and update the offset for the start of the new layer.
+    // Note that a layer is viewed as just another list.
+    external_index_builder_->NewList();
+  }
 
   insert_layer_offset_ = true;
 }

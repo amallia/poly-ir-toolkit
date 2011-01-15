@@ -39,7 +39,6 @@
 #include "coding_policy.h"
 #include "coding_policy_helper.h"
 #include "configuration.h"
-#include "external_index.h"
 #include "index_layout_parameters.h"
 
 /**************************************************************************************************************************************************************
@@ -357,9 +356,11 @@ private:
  * IndexBuilder
  *
  **************************************************************************************************************************************************************/
+class ExternalIndexBuilder;
 class IndexBuilder {
 public:
-  IndexBuilder(const char* lexicon_filename, const char* index_filename, const CodingPolicy& block_header_compressor);
+  IndexBuilder(const char* lexicon_filename, const char* index_filename, const CodingPolicy& block_header_compressor,
+               ExternalIndexBuilder* external_index_builder = NULL);
   ~IndexBuilder();
 
   void WriteBlocks();
@@ -429,7 +430,8 @@ private:
 
   const CodingPolicy& block_header_compressor_;
 
-  ExternalIndexBuilder external_index_builder_;
+  // Not all indices need an external index to be built, so it's passed in as a pointer, which could be NULL.
+  ExternalIndexBuilder* external_index_builder_;
 
   // Used to build an in-memory block header index during query processing (when the index is loaded into main memory).
   uint64_t total_num_chunks_;           // The total number of chunks in this index.
