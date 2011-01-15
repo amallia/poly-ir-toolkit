@@ -300,7 +300,7 @@ public:
   ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
            int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
            const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor,
-           uint32_t external_index_offset, const ExternalIndexReader& external_index_reader, bool single_term_query);
+           uint32_t external_index_offset, const ExternalIndexReader* external_index_reader, bool single_term_query);
   ~ListData();
 
   void FreeQueuedBlocks();
@@ -480,7 +480,7 @@ private:
   int term_num_;                     // May be used by the query processor to map this object back to the term it corresponds to.
 
   ExternalIndexReader::ExternalIndexPointer external_index_pointer_;
-  const ExternalIndexReader& external_index_reader_;
+  const ExternalIndexReader* external_index_reader_;
 
   bool single_term_query_;           // A hint from an external source that allows us to optimize list traversal if we know that we'll never be doing any list skipping.
 
@@ -701,8 +701,7 @@ private:
 /**************************************************************************************************************************************************************
  * IndexReader
  *
- * Contains useful methods for traversing inverted lists.
- * TODO: Query processing across different indexes...probably should be supported by QueryProcessor class.
+ * Implements the basic methods required for inverted index traversal.
  **************************************************************************************************************************************************************/
 class IndexReader {
 public:
@@ -719,7 +718,7 @@ public:
   };
 
   IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
-              const char* meta_info_filename, bool use_positions);
+              const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader = NULL);
 
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query = false);
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query, int term_num);
@@ -820,7 +819,7 @@ private:
   bool includes_positions_;            // True if the index contains position data.
   bool use_positions_;                 // A hint from an external source that allows us to speed up processing a bit if it doesn't require positions.
 
-  ExternalIndexReader external_index_reader_;
+  const ExternalIndexReader* external_index_reader_;
 
   // Decompressors for various portions of the index.
   CodingPolicy doc_id_decompressor_;

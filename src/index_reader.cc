@@ -215,7 +215,7 @@ int BlockDecoder::DecodeHeader(uint32_t* compressed_header) {
 ListData::ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
                    int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
                    const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor,
-                   uint32_t external_index_offset, const ExternalIndexReader& external_index_reader, bool single_term_query) :
+                   uint32_t external_index_offset, const ExternalIndexReader* external_index_reader, bool single_term_query) :
   kNumLeftoverDocs(num_docs % ChunkDecoder::kChunkSize),
   kReadAheadBlocks(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kReadAheadBlocks))),
   cache_manager_(cache_manager),
@@ -327,11 +327,13 @@ void ListData::SkipBlocks(int num_blocks, uint32_t initial_chunk_num) {
 
     curr_block_decoder_.InitBlock(curr_block_num_, initial_chunk_num, cache_manager_.GetBlock(curr_block_num_));
 
-    // Advance the external index pointer up to the block we need and decode it.
-    external_index_reader_.AdvanceToBlock(curr_block_num_, &external_index_pointer_);
+    if (external_index_reader_ != NULL) {
+      // Advance the external index pointer up to the block we need and decode it.
+      external_index_reader_->AdvanceToBlock(curr_block_num_, &external_index_pointer_);
 
-    // Set the max score of the block, which we get from the external index.
-    curr_block_decoder_.set_block_max_score(external_index_pointer_.block_max_score);
+      // Set the max score of the block, which we get from the external index.
+      curr_block_decoder_.set_block_max_score(external_index_pointer_.block_max_score);
+    }
   }
 }
 
@@ -706,7 +708,7 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
  * needed and we know it has been loaded into memory.
  **************************************************************************************************************************************************************/
 IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename,
-                         const char* doc_map_filename, const char* meta_info_filename, bool use_positions) :
+                         const char* doc_map_filename, const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader) :
   purpose_(purpose),
   document_order_(document_order),
   kLexiconSize(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kLexiconSize))),
@@ -717,7 +719,7 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
   includes_contexts_(false),
   includes_positions_(false),  // TODO: Get from index meta file.
   use_positions_(use_positions && includes_positions_),
-  external_index_reader_("index.ext"),
+  external_index_reader_(external_index_reader),
   doc_id_decompressor_(CodingPolicy::kDocId),
   frequency_decompressor_(CodingPolicy::kFrequency),
   position_decompressor_(CodingPolicy::kPosition),
