@@ -25,7 +25,7 @@ OBJS =		src/cache_manager.o \
 			src/configuration.o \
 			src/document_collection.o \
 			src/document_map.o \
-			src/external_index_data.o \
+			src/external_index.o \
 			src/globals.o \
 			src/index_build.o \
 			src/index_cat.o \
