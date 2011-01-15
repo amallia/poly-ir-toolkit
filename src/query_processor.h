@@ -26,7 +26,6 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// The query processor. Implements block caching, skipping over chunks, decoding frequencies and positions on demand.
 //==============================================================================================================================================================
 
 #ifndef QUERY_PROCESSOR_H_
@@ -43,15 +42,17 @@
 #include <utility>
 #include <vector>
 
-#include "cache_manager.h"
 #include "index_layout_parameters.h"
 #include "index_reader.h"
 
 /**************************************************************************************************************************************************************
  * QueryProcessor
  *
- * Responsible for query processing. Contains useful methods for traversing inverted lists.
+ * Implements various query algorithms. These support block caching (for on-disk indices) and chunk skipping. Frequencies and positions (if used) are
+ * only decoded if the algorithm needs to score a docID.
  **************************************************************************************************************************************************************/
+class CacheManager;
+class ExternalIndexReader;
 struct Accumulator;
 
 typedef std::pair<float, uint32_t> Result;
@@ -127,6 +128,8 @@ public:
   void PrintQueryingParameters();
 
 private:
+  const ExternalIndexReader* GetExternalIndexReader(QueryAlgorithm query_algorithm) const;
+
   QueryAlgorithm query_algorithm_;  // The query algorithm to use. This is also dependent on the type of index we're using.
   QueryMode query_mode_;            // The way we'll be accepting queries.
   ResultFormat result_format_;      // The result format we'll be using for the output.
@@ -142,7 +145,10 @@ private:
                                          // This plays a role in the ranking function (for document length normalization).
   uint32_t collection_total_num_docs_;   // The total number of documents in the indexed collection.
 
+  const ExternalIndexReader* external_index_reader_;  // Only used for certain querying algorithms.
+
   CacheManager* cache_policy_;
+
   IndexReader index_reader_;
 
   // Some additional index information.

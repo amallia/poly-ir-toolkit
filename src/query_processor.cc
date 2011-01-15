@@ -41,8 +41,10 @@
 #include <limits>
 #include <sstream>
 
+#include "cache_manager.h"
 #include "config_file_properties.h"
 #include "configuration.h"
+#include "external_index.h"
 #include "globals.h"
 #include "logger.h"
 #include "meta_file_properties.h"
@@ -64,12 +66,14 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
   use_positions_(false),  // TODO: Get from configuration file.
   collection_average_doc_len_(0),
   collection_total_num_docs_(0),
+  external_index_reader_(GetExternalIndexReader(query_algorithm_)),
   cache_policy_(((Configuration::GetConfiguration().GetValue(config_properties::kMemoryMappedIndex) == "true") ?
                   static_cast<CacheManager*> (new MemoryMappedCachePolicy(index_filename)) :
                   (Configuration::GetConfiguration().GetValue(config_properties::kMemoryResidentIndex) == "true") ?
                     static_cast<CacheManager*> (new FullContiguousCachePolicy(index_filename)) :
                     static_cast<CacheManager*> (new LruCachePolicy(index_filename)))),
-  index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, *cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename, use_positions_),
+  index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, *cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename, use_positions_,
+                external_index_reader_),
   index_layered_(false),
   index_overlapping_layers_(false),
   index_num_layers_(1),
@@ -164,6 +168,7 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
 }
 
 QueryProcessor::~QueryProcessor() {
+  delete external_index_reader_;
   delete cache_policy_;
 }
 
@@ -2471,4 +2476,14 @@ void QueryProcessor::PrintQueryingParameters() {
   cout << "collection_average_doc_len_: " << collection_average_doc_len_ << endl;
   cout << "Using positions: " << use_positions_ << endl;
   cout << endl;
+}
+
+const ExternalIndexReader* QueryProcessor::GetExternalIndexReader(QueryAlgorithm query_algorithm) const {
+  switch (query_algorithm) {
+    case kMaxScore:
+    case kDualLayeredMaxScore:
+      return new ExternalIndexReader("index.ext");
+    default:
+      return NULL;
+  }
 }
