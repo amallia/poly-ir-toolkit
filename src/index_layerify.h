@@ -51,8 +51,9 @@
  * LayeredIndexGenerator
  *
  **************************************************************************************************************************************************************/
-class IndexBuilder;
 class DocIdScoreComparison;
+class ExternalIndexBuilder;
+class IndexBuilder;
 
 class LayeredIndexGenerator {
 public:
@@ -67,9 +68,10 @@ private:
   float GetChunkMaxScore(const DocIdScoreComparison& doc_id_score_comparator, IndexEntry* chunk_entries, int num_chunk_entries);
   void WriteMetaFile(const std::string& meta_filename);
 
-  IndexFiles output_index_files_;  // The index filenames for the layered index.
-  Index* index_;                   // The index we're creating layers for.
-  IndexBuilder* index_builder_;    // The current layered index we're building.
+  IndexFiles output_index_files_;                 // The index filenames for the layered index.
+  Index* index_;                                  // The index we're creating layers for.
+  ExternalIndexBuilder* external_index_builder_;  // Responsible for building the external index, necessary for maximum block and chunk score information.
+  IndexBuilder* index_builder_;                   // The current layered index we're building.
 
   // Some index properties.
   bool includes_contexts_;

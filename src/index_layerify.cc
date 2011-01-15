@@ -49,6 +49,7 @@
 #include "coding_policy_helper.h"
 #include "config_file_properties.h"
 #include "configuration.h"
+#include "external_index.h"
 #include "globals.h"
 #include "index_build.h"
 #include "index_merge.h"
@@ -65,6 +66,7 @@ using namespace std;
 LayeredIndexGenerator::LayeredIndexGenerator(const IndexFiles& input_index_files, const string& output_index_prefix) :
   output_index_files_(output_index_prefix),
   index_(NULL),
+  external_index_builder_(NULL),
   index_builder_(NULL),
   includes_contexts_(true),
   includes_positions_(true),
@@ -81,7 +83,9 @@ LayeredIndexGenerator::LayeredIndexGenerator(const IndexFiles& input_index_files
   index_posting_count_(0),
   first_doc_id_in_index_(0),
   last_doc_id_in_index_(0) {
-  index_builder_ = new IndexBuilder(output_index_files_.lexicon_filename().c_str(), output_index_files_.index_filename().c_str(), block_header_compressor_);
+  external_index_builder_ = new ExternalIndexBuilder("index.ext");
+  index_builder_ = new IndexBuilder(output_index_files_.lexicon_filename().c_str(), output_index_files_.index_filename().c_str(), block_header_compressor_,
+                                    external_index_builder_);
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, input_index_files.lexicon_filename().c_str(),
