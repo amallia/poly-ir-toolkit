@@ -77,7 +77,9 @@ public:
     kDualLayeredWand,
 
     kMaxScore,
-    kDualLayeredMaxScore
+    kDualLayeredMaxScore,
+
+    kDaatAndTopPositions
   };
 
   enum QueryMode {
@@ -114,8 +116,8 @@ public:
   float KthScore(float new_score, float* scores, int num_scores, int kth_score);
 
   int IntersectLists(ListData** lists, int num_lists, Result* results, int num_results);
-
   int IntersectLists(ListData** merge_lists, int num_merge_lists, ListData** lists, int num_lists, Result* results, int num_results);
+  int IntersectListsTopPositions(ListData** lists, int num_lists, Result* results, int num_results);
 
   int MergeLists(ListData** lists, int num_lists, uint32_t* merged_doc_ids, int max_merged_doc_ids);
   int MergeLists(ListData** lists, int num_lists, Result* results, int num_results);
@@ -175,6 +177,20 @@ private:
 };
 
 /**************************************************************************************************************************************************************
+ * ResultPositionTuple
+ *
+ **************************************************************************************************************************************************************/
+struct ResultPositionTuple {
+  uint32_t doc_id;
+  float score;
+  uint32_t* positions;
+
+  bool operator<(const ResultPositionTuple& rhs) const {
+    return score < rhs.score;
+  }
+};
+
+/**************************************************************************************************************************************************************
  * Accumulator
  *
  **************************************************************************************************************************************************************/
@@ -214,7 +230,10 @@ struct AccumulatorScoreAscendingCompare {
  **************************************************************************************************************************************************************/
 struct ResultCompare {
   bool operator()(const Result& l, const Result& r) const {
-    return l > r;
+//    return l > r;
+
+    // TODO: Should be sufficient to compare only the score; we don't care about the order of docIDs that score the same.
+    return l.first > r.first;
   }
 };
 

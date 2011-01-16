@@ -63,7 +63,7 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
   max_num_results_(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kMaxNumberResults))),
   silent_mode_(false),  // TODO: Get from configuration file.
   warm_up_mode_(false),  // TODO: Get from configuration file.
-  use_positions_(false),  // TODO: Get from configuration file.
+  use_positions_(Configuration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kUsePositions))),
   collection_average_doc_len_(0),
   collection_total_num_docs_(0),
   external_index_reader_(GetExternalIndexReader(query_algorithm_)),
@@ -287,6 +287,11 @@ int QueryProcessor::ProcessQuery(LexiconData** query_term_data, int num_query_te
       break;
     case kDaatOr:
       total_num_results = MergeLists(list_data_pointers, num_query_terms, results, kMaxNumResults);
+      break;
+    case kDaatAndTopPositions:
+      // Query terms must be arranged in order from shortest list to longest list.
+      sort(list_data_pointers, list_data_pointers + num_query_terms, ListCompare());
+      total_num_results = IntersectListsTopPositions(list_data_pointers, num_query_terms, results, kMaxNumResults);
       break;
     default:
       total_num_results = 0;
@@ -2034,7 +2039,7 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
 
   // BM25 parameters: see 'http://en.wikipedia.org/wiki/Okapi_BM25'.
   const float kBm25K1 =  2.0;  // k1
-  const float kBm25B = 0.75;  // b
+  const float kBm25B = 0.75;   // b
 
   // We can precompute a few of the BM25 values here.
   const float kBm25NumeratorMul = kBm25K1 + 1;
@@ -2059,7 +2064,7 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
   }
 
   // Necessary for the merge lists.
-  // TODO: Can also try the heap based method here. Can select between heap and array method based on num_merge_lists...
+  // TODO: Can also try the heap based method here. Can select between heap and array method based on 'num_merge_lists'.
   uint32_t min_doc_id;
 
   while (did < numeric_limits<uint32_t>::max()) {
@@ -2181,6 +2186,140 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
   return total_num_results;
 }
 
+// Processes queries in AND mode.
+// For each docID that makes it into the top-k, we copy its positions list into a temporary memory location (passed in)
+// and store a pointer to the positions as a tuple with the docID, the score, and the positions pointer.
+// Returns the total number of document results found in the intersection.
+int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, Result* results, int num_results) {
+  const int kNumLists = num_lists;                              // The number of lists we traverse.
+  const int kMaxNumResults = num_results;                       // The maximum number of results we have keep in main memory at any time.
+  const int kMaxPositions = MAX_FREQUENCY_PROPERTIES;           // The maximum number of positions for a docID in any list.
+  const int kResultPositionStride = kMaxPositions + 1;          // For each result, per list, we store all the positions, plus an integer
+                                                                // indicating the number of positions stored.
+  const int kResultStride = kNumLists * kResultPositionStride;  // For each result, we have 'num_lists' worth of position information.
+
+  // We will store position information for the top-k candidates in this array. The first k results will be stored sequentially, but afterwards
+  // any result that gets pushed out of the top-k, will have it's positions replaced. We always store a pointer to the start of the positions
+  // for each top-k result.
+  uint32_t* position_pool = new uint32_t[kResultStride * kMaxNumResults];
+
+  // The k temporary docID, score, and position pointer tuples, with a score comparator to maintain the top-k results.
+  ResultPositionTuple* result_position_tuples = new ResultPositionTuple[kMaxNumResults];
+
+  int total_num_results = 0;
+
+  // BM25 parameters: see 'http://en.wikipedia.org/wiki/Okapi_BM25'.
+  const float kBm25K1 =  2.0;  // k1
+  const float kBm25B = 0.75;   // b
+
+  // We can precompute a few of the BM25 values here.
+  const float kBm25NumeratorMul = kBm25K1 + 1;
+  const float kBm25DenominatorAdd = kBm25K1 * (1 - kBm25B);
+  const float kBm25DenominatorDocLenMul = kBm25K1 * kBm25B / collection_average_doc_len_;
+
+  // BM25 components.
+  float bm25_sum;  // The BM25 sum for the current document we're processing in the intersection.
+  int doc_len;
+  uint32_t f_d_t[kNumLists];  // Using a variable length array here.
+  const uint32_t* positions_d_t[kNumLists];  // Using a variable length array here.
+
+  uint32_t did = 0;
+  uint32_t d;
+  int i, j, k;
+
+  // Compute the inverse document frequency component. It is not document dependent, so we can compute it just once for each list.
+  float idf_t[kNumLists];  // Using a variable length array here.
+  int num_docs_t;
+  for (i = 0; i < kNumLists; ++i) {
+    num_docs_t = lists[i]->num_docs_complete_list();
+    idf_t[i] = log10(1 + (collection_total_num_docs_ - num_docs_t + 0.5) / (num_docs_t + 0.5));
+  }
+
+  while (did < numeric_limits<uint32_t>::max()) {
+    // Get next element from shortest list.
+    if ((did = index_reader_.NextGEQ(lists[0], did)) == numeric_limits<uint32_t>::max())
+      break;
+
+    d = did;
+
+    // Try to find entries with same docID in other lists.
+    for (i = 1; (i < kNumLists) && ((d = index_reader_.NextGEQ(lists[i], did)) == did); ++i) {
+      continue;
+    }
+
+    if (d > did) {
+      // Not in intersection.
+      did = d;
+    } else {
+      assert(d == did);
+
+      // Compute BM25 score from frequencies.
+      bm25_sum = 0;
+      for (i = 0; i < kNumLists; ++i) {
+        f_d_t[i] = index_reader_.GetFreq(lists[i], did);
+        doc_len = index_reader_.GetDocLen(did);
+        positions_d_t[i] = lists[i]->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+        bm25_sum += idf_t[i] * (f_d_t[i] * kBm25NumeratorMul) / (f_d_t[i] + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
+      }
+
+      // Use a heap to maintain the top-k documents. This has to be a min heap,
+      // where the lowest scoring document is on top, so that we can easily pop it,
+      // and push a higher scoring document if need be.
+      if (total_num_results < num_results) {
+        // We insert a document if we don't have k documents yet.
+        result_position_tuples[total_num_results].doc_id = did;
+        result_position_tuples[total_num_results].score = bm25_sum;
+        result_position_tuples[total_num_results].positions = &position_pool[total_num_results * kResultStride];
+        for (i = 0; i < kNumLists; ++i) {
+          result_position_tuples[total_num_results].positions[i * kResultPositionStride] = f_d_t[i];
+          memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i]);
+        }
+        push_heap(result_position_tuples, result_position_tuples + total_num_results + 1);
+      } else {
+        if (bm25_sum > result_position_tuples[0].score) {
+          // We insert a document only if it's score is greater than the minimum scoring document in the heap.
+          pop_heap(result_position_tuples, result_position_tuples + num_results);
+          result_position_tuples[num_results - 1].score = bm25_sum;
+          result_position_tuples[num_results - 1].doc_id = did;
+          // Replace the positions.
+          for (i = 0; i < kNumLists; ++i) {
+            result_position_tuples[num_results - 1].positions[i * kResultPositionStride] = f_d_t[i];
+            memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i]);
+          }
+          push_heap(result_position_tuples, result_position_tuples + num_results);
+        }
+      }
+
+      ++total_num_results;
+      ++did;  // Search for next docID.
+    }
+  }
+
+  // Utilize positions and prepare final result set.
+  const int kNumReturnedResults = min(kMaxNumResults, total_num_results);
+  for (i = 0; i < kNumReturnedResults; ++i) {
+    for(j = 0; j < kNumLists; ++j) {
+      const uint32_t* positions = &result_position_tuples[i].positions[j * kResultPositionStride];
+      int num_positions = positions[0];
+      ++positions;
+      for (k = 0; k < num_positions; ++k) {
+        cout << positions[k] << endl;
+      }
+    }
+
+    results[i].first = result_position_tuples[i].score;
+    results[i].second = result_position_tuples[i].doc_id;
+  }
+
+  delete[] result_position_tuples;
+  delete[] position_pool;
+
+  // Sort top-k results in descending order by document score.
+  sort(results, results + kNumReturnedResults, ResultCompare());
+
+  return total_num_results;
+}
+
 void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   // All the words in the lexicon are lower case, so queries must be too, convert them to lower case.
   for (size_t i = 0; i < query_line.size(); i++) {
@@ -2278,6 +2417,7 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
     switch (query_algorithm_) {
       case kDaatAnd:
       case kDaatOr:
+      case kDaatAndTopPositions:
         total_num_results = ProcessQuery(query_term_data, num_query_terms, ranked_results, &results_size);
         break;
       case kDualLayeredOverlappingDaat:
@@ -2403,12 +2543,8 @@ void QueryProcessor::LoadIndexProperties() {
     collection_average_doc_len_ = collection_total_document_lengths / collection_total_num_docs_;
   }
 
-  // Default is not to use positions.
-  if (index_reader_.includes_positions()) {
-    string use_positions = Configuration::GetConfiguration().GetValue(config_properties::kUsePositions);
-    if (use_positions == "true") {
-      use_positions_ = true;
-    }
+  if (!index_reader_.includes_positions()) {
+    use_positions_ = false;
   }
 
   // Determine whether this index is layered and whether the index layers are overlapping.
