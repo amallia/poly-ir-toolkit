@@ -2368,6 +2368,7 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   ProcessingSemantics processing_semantics;
   switch (query_algorithm_) {
     case kDaatAnd:
+    case kDaatAndTopPositions:
     case kDualLayeredOverlappingDaat:
     case kDualLayeredOverlappingMergeDaat:
       processing_semantics = kAnd;
