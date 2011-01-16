@@ -2580,6 +2580,7 @@ void QueryProcessor::LoadIndexProperties() {
     case kDualLayeredWand:
     case kMaxScore:  // TODO: For MaxScore, only need a single layered index, but need term upperbounds, which is not yet supported.
     case kDualLayeredMaxScore:
+    case kDaatAndTopPositions:
       if (index_layered_ && !index_overlapping_layers_) {
         inappropriate_algorithm = true;
       }
