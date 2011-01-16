@@ -640,14 +640,14 @@ void LoopThroughLexicon(const char* lexicon_filename) {
     GetErrorLogger().LogErrno("fstat() in LoopThroughLexicon()", errno, true);
   }
   off_t lexicon_file_size = stat_buf.st_size;
-
   char* lexicon_buffer = new char[lexicon_file_size];
+
   ssize_t read_ret;
   off_t bytes_read = 0;
-  while ((read_ret = read(lexicon_fd, lexicon_buffer + bytes_read, lexicon_file_size)) > 0) {
+  while ((read_ret = read(lexicon_fd, lexicon_buffer + bytes_read, lexicon_file_size - bytes_read)) > 0) {
     bytes_read += read_ret;
   }
-  if (bytes_read == -1) {
+  if (read_ret == -1) {
     GetErrorLogger().LogErrno("read() in LoopThroughLexicon(), trying to read lexicon", errno, true);
   }
   assert(bytes_read == lexicon_file_size);
@@ -718,6 +718,12 @@ void LoopThroughLexicon(const char* lexicon_filename) {
     int score_thresholds_bytes = num_layers * sizeof(*score_thresholds);
     lexicon_buffer_ptr_ += score_thresholds_bytes;
     num_bytes_read += score_thresholds_bytes;
+
+    // external_index_offsets
+    uint32_t* external_index_offsets = reinterpret_cast<uint32_t*> (lexicon_buffer_ptr_);
+    int external_index_offsets_bytes = num_layers * sizeof(*external_index_offsets);
+    lexicon_buffer_ptr_ += external_index_offsets_bytes;
+    num_bytes_read += external_index_offsets_bytes;
 
     cout << string(term, term_len) << endl;
   }
@@ -881,6 +887,8 @@ int main(int argc, char** argv) {
             command_line_args.query_algorithm = QueryProcessor::kMaxScore;
           else if (strcmp("dual-layered-max-score", optarg) == 0)
             command_line_args.query_algorithm = QueryProcessor::kDualLayeredMaxScore;
+          else if (strcmp("daat-and-top-positions", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kDaatAndTopPositions;
           else
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("query-mode", long_opts[long_index].name) == 0) {
