@@ -437,7 +437,7 @@ private:
 
   const int kNumLeftoverDocs;        // The uneven number of documents that spilled over into the last chunk of the list.
                                      // (that is, they couldn't be evenly divided by the standard amount of documents in a full chunk).
-  const int kReadAheadBlocks;        // The number of blocks we want to read ahead into the cache. TODO: Now that we know how many blocks we have per list --- we can be exact about this.
+  const int kReadAheadBlocks;        // The number of blocks we want to read ahead into the cache.
   CacheManager& cache_manager_;      // Used to retrieve blocks from the inverted list.
   BlockDecoder curr_block_decoder_;  // The current block being processed in this inverted list.
 
