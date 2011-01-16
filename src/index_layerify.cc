@@ -152,8 +152,8 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   enum LayerSplitMode {
     kPercentage, kPercentageFixedBounded, kExponentiallyIncreasing
   };
-  LayerSplitMode layer_splitting_strategy = kExponentiallyIncreasing;
-//  LayerSplitMode layer_splitting_strategy = kPercentageFixedBounded;
+//  LayerSplitMode layer_splitting_strategy = kExponentiallyIncreasing;
+  LayerSplitMode layer_splitting_strategy = kPercentageFixedBounded;
 
   // If we have overlapping layers, should the threshold score include the overlapping documents?
   // This should generally be set to 'false', since all layers will then have the same threshold stored,
