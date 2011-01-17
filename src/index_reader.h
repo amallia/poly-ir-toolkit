@@ -746,8 +746,6 @@ public:
   int GetDocLen(uint32_t doc_id);
   const char* GetDocUrl(uint32_t doc_id);
 
-  void LoadMetaInfo();
-
   void ResetStats() {
     total_cached_bytes_read_ = 0;
     total_disk_bytes_read_ = 0;

@@ -716,8 +716,8 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
   document_map_("index.dmap"/*doc_map_filename*/),  // TODO: Use passed in filename.
   cache_manager_(cache_manager),
   meta_info_(meta_info_filename),
-  includes_contexts_(false),
-  includes_positions_(false),  // TODO: Get from index meta file.
+  includes_contexts_(IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesContexts), true)),
+  includes_positions_(IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesPositions), true)),
   use_positions_(use_positions && includes_positions_),
   external_index_reader_(external_index_reader),
   doc_id_decompressor_(CodingPolicy::kDocId),
@@ -730,8 +730,6 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
   if (kLexiconSize <= 0) {
     Configuration::ErroneousValue(config_properties::kLexiconSize, Configuration::GetConfiguration().GetValue(config_properties::kLexiconSize));
   }
-
-  LoadMetaInfo();
 
   coding_policy_helper::LoadPolicyAndCheck(doc_id_decompressor_, meta_info_.GetValue(meta_properties::kIndexDocIdCoding), "docID");
   coding_policy_helper::LoadPolicyAndCheck(frequency_decompressor_, meta_info_.GetValue(meta_properties::kIndexFrequencyCoding), "frequency");
@@ -1094,9 +1092,4 @@ int IndexReader::GetDocLen(uint32_t doc_id) {
 const char* IndexReader::GetDocUrl(uint32_t doc_id) {
   // TODO: Get value from doc map.
   return "url";
-}
-
-void IndexReader::LoadMetaInfo() {
-  includes_contexts_ = IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesContexts), false);
-  includes_positions_ = IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesPositions), false);
 }
