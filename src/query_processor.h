@@ -182,11 +182,18 @@ private:
  **************************************************************************************************************************************************************/
 struct ResultPositionTuple {
   uint32_t doc_id;
+  int doc_len;
   float score;
   uint32_t* positions;
 
+  // Used to implement min heap for candidate documents.
   bool operator<(const ResultPositionTuple& rhs) const {
-    return score < rhs.score;
+    return score > rhs.score;
+  }
+
+  // Used to sort documents in descending order by score.
+  bool operator()(const ResultPositionTuple& l, const ResultPositionTuple& r) const {
+    return l.score > r.score;
   }
 };
 

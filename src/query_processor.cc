@@ -2186,25 +2186,32 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
   return total_num_results;
 }
 
-// Processes queries in AND mode.
-// For each docID that makes it into the top-k, we copy its positions list into a temporary memory location (passed in)
-// and store a pointer to the positions as a tuple with the docID, the score, and the positions pointer.
+// Processes queries in AND mode. Utilizes position data for the top scoring docIDs.
+// The top docIDs (the number is configured within the function, by 'kNumTopPositionsToScore') are ranked according to BM25,
+// and their position data is stored as well; these top scoring docIDs are then ranked along with position information,
+// finally storing the new top 'num_results' docIDs into 'results'.
 // Returns the total number of document results found in the intersection.
 int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, Result* results, int num_results) {
+  assert(use_positions_ == true);
+
+  // Maintain the top docIDs in a heap of this size, scored using standard BM25.
+  // Then, utilize the position information for these results and keep only the top 'num_results'.
+  const int kNumTopPositionsToScore = max(200, num_results);
+
   const int kNumLists = num_lists;                              // The number of lists we traverse.
-  const int kMaxNumResults = num_results;                       // The maximum number of results we have keep in main memory at any time.
+  const int kMaxNumResults = num_results;                       // The maximum number of results we have to return.
   const int kMaxPositions = MAX_FREQUENCY_PROPERTIES;           // The maximum number of positions for a docID in any list.
   const int kResultPositionStride = kMaxPositions + 1;          // For each result, per list, we store all the positions, plus an integer
                                                                 // indicating the number of positions stored.
   const int kResultStride = kNumLists * kResultPositionStride;  // For each result, we have 'num_lists' worth of position information.
 
-  // We will store position information for the top-k candidates in this array. The first k results will be stored sequentially, but afterwards
-  // any result that gets pushed out of the top-k, will have it's positions replaced. We always store a pointer to the start of the positions
-  // for each top-k result.
-  uint32_t* position_pool = new uint32_t[kResultStride * kMaxNumResults];
+  // We will store position information for the top candidates in this array. The first 'kNumTopPositionsToScore' results will be stored sequentially,
+  // but afterwards any result that gets pushed out of the top candidates heap, will have its positions replaced.
+  // We always store a pointer to the start of the positions for each candidate document.
+  uint32_t* position_pool = new uint32_t[kResultStride * kNumTopPositionsToScore];
 
   // The k temporary docID, score, and position pointer tuples, with a score comparator to maintain the top-k results.
-  ResultPositionTuple* result_position_tuples = new ResultPositionTuple[kMaxNumResults];
+  ResultPositionTuple* result_position_tuples = new ResultPositionTuple[kNumTopPositionsToScore];
 
   int total_num_results = 0;
 
@@ -2219,16 +2226,19 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
   // BM25 components.
   float bm25_sum;  // The BM25 sum for the current document we're processing in the intersection.
-  int doc_len;
-  uint32_t f_d_t[kNumLists];  // Using a variable length array here.
-  const uint32_t* positions_d_t[kNumLists];  // Using a variable length array here.
+  int doc_len_d;   // The length for the current document we're processing in the intersection.
+  // Using variable length arrays here.
+  uint32_t f_d_t[kNumLists];                 // The document term frequencies, one per list.
+  const uint32_t* positions_d_t[kNumLists];  // The document position pointers, one per list.
+  float acc_d_t[kNumLists];                  // The term proximity accumulators, one per list.
+  float idf_t[kNumLists];                    // The inverse document frequencies, one per list.
 
   uint32_t did = 0;
   uint32_t d;
-  int i, j, k;
+
+  int r, i, j, k, l;
 
   // Compute the inverse document frequency component. It is not document dependent, so we can compute it just once for each list.
-  float idf_t[kNumLists];  // Using a variable length array here.
   int num_docs_t;
   for (i = 0; i < kNumLists; ++i) {
     num_docs_t = lists[i]->num_docs_complete_list();
@@ -2255,36 +2265,38 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
       // Compute BM25 score from frequencies.
       bm25_sum = 0;
+      doc_len_d = index_reader_.GetDocLen(did);
       for (i = 0; i < kNumLists; ++i) {
         f_d_t[i] = index_reader_.GetFreq(lists[i], did);
-        doc_len = index_reader_.GetDocLen(did);
         positions_d_t[i] = lists[i]->curr_block_decoder()->curr_chunk_decoder()->current_positions();
-        bm25_sum += idf_t[i] * (f_d_t[i] * kBm25NumeratorMul) / (f_d_t[i] + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
+        bm25_sum += idf_t[i] * (f_d_t[i] * kBm25NumeratorMul) / (f_d_t[i] + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len_d);
       }
 
       // Use a heap to maintain the top-k documents. This has to be a min heap,
       // where the lowest scoring document is on top, so that we can easily pop it,
       // and push a higher scoring document if need be.
-      if (total_num_results < num_results) {
+      if (total_num_results < kNumTopPositionsToScore) {
         // We insert a document if we don't have k documents yet.
         result_position_tuples[total_num_results].doc_id = did;
+        result_position_tuples[total_num_results].doc_len = doc_len_d;
         result_position_tuples[total_num_results].score = bm25_sum;
         result_position_tuples[total_num_results].positions = &position_pool[total_num_results * kResultStride];
         for (i = 0; i < kNumLists; ++i) {
           result_position_tuples[total_num_results].positions[i * kResultPositionStride] = f_d_t[i];
-          memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i]);
+          memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i] * sizeof(*positions_d_t[i]));
         }
         push_heap(result_position_tuples, result_position_tuples + total_num_results + 1);
       } else {
         if (bm25_sum > result_position_tuples[0].score) {
           // We insert a document only if it's score is greater than the minimum scoring document in the heap.
-          pop_heap(result_position_tuples, result_position_tuples + num_results);
-          result_position_tuples[num_results - 1].score = bm25_sum;
-          result_position_tuples[num_results - 1].doc_id = did;
+          pop_heap(result_position_tuples, result_position_tuples + kNumTopPositionsToScore);
+          result_position_tuples[kNumTopPositionsToScore - 1].doc_id = did;
+          result_position_tuples[kNumTopPositionsToScore - 1].doc_len = doc_len_d;
+          result_position_tuples[kNumTopPositionsToScore - 1].score = bm25_sum;
           // Replace the positions.
           for (i = 0; i < kNumLists; ++i) {
-            result_position_tuples[num_results - 1].positions[i * kResultPositionStride] = f_d_t[i];
-            memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i]);
+            result_position_tuples[kNumTopPositionsToScore - 1].positions[i * kResultPositionStride] = f_d_t[i];
+            memcpy(&result_position_tuples[kNumTopPositionsToScore - 1].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i] * sizeof(*positions_d_t[i]));
           }
           push_heap(result_position_tuples, result_position_tuples + num_results);
         }
@@ -2296,9 +2308,59 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
   }
 
   // Utilize positions and prepare final result set.
-  const int kNumReturnedResults = min(kMaxNumResults, total_num_results);
-  for (i = 0; i < kNumReturnedResults; ++i) {
-    for(j = 0; j < kNumLists; ++j) {
+  // Note that positions are stored in gap coded form.
+  // We use a formula that rewards proximity of the query terms. It's too slow to run on all possible candidates.
+  const int kNumReturnedResults = min(kNumTopPositionsToScore, total_num_results);
+
+  for (i = 0; i < kNumLists; ++i) {
+    acc_d_t[i] = 0;
+  }
+
+  // Term proximity components.
+  int num_positions_top, num_positions_bottom;
+  const uint32_t* positions_top, *positions_bottom;
+  uint32_t positions_top_actual, positions_bottom_actual;
+  int dist;
+  float ids;
+
+  for (r = 0; r < kNumReturnedResults; ++r) {
+    for (i = 0; i < kNumLists; ++i) {
+      num_positions_top = result_position_tuples[r].positions[i * kResultPositionStride];
+      positions_top = &result_position_tuples[r].positions[i * kResultPositionStride + 1];
+
+      for (j = i + 1; j < kNumLists; ++j) {
+        num_positions_bottom = result_position_tuples[r].positions[j * kResultPositionStride];
+        positions_bottom = &result_position_tuples[r].positions[j * kResultPositionStride + 1];
+
+        positions_top_actual = 0;  // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
+        for (k = 0; k < num_positions_top; ++k) {
+          positions_top_actual += positions_top[k];
+
+          positions_bottom_actual = 0;  // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
+          for (l = 0; l < num_positions_bottom; ++l) {
+            positions_bottom_actual += positions_bottom[l];
+
+            dist = positions_top_actual - positions_bottom_actual;
+            assert(dist != 0);  // This is an indication of a bug in the program.
+
+            ids = 1.0 / (dist * dist);
+
+            acc_d_t[i] += idf_t[i] * ids;
+            acc_d_t[j] += idf_t[j] * ids;
+          }
+        }
+      }
+
+      // Include the normalized proximity score.
+      result_position_tuples[r].score += min(1.0f, idf_t[i]) * (acc_d_t[i] * kBm25NumeratorMul) / (acc_d_t[i] + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * result_position_tuples[r].doc_len);
+    }
+  }
+
+  // This just iterates through all the positions for each list of each result.
+  /*for (i = 0; i < kNumReturnedResults; ++i) {
+    cout << "docID: " << result_position_tuples[i].doc_id << endl;
+    for (j = 0; j < kNumLists; ++j) {
+      cout << "Positions for list: " << j << endl;
       const uint32_t* positions = &result_position_tuples[i].positions[j * kResultPositionStride];
       int num_positions = positions[0];
       ++positions;
@@ -2306,16 +2368,20 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
         cout << positions[k] << endl;
       }
     }
+  }*/
 
+  // Sort top results in descending order by document score.
+  sort(result_position_tuples, result_position_tuples + kNumReturnedResults, ResultPositionTuple());
+
+  // Copy the top scoring documents into the final result set.
+  const int kNumFinalResultSet = min(kMaxNumResults, kNumReturnedResults);
+  for (i = 0; i < kNumFinalResultSet; ++i) {
     results[i].first = result_position_tuples[i].score;
     results[i].second = result_position_tuples[i].doc_id;
   }
 
   delete[] result_position_tuples;
   delete[] position_pool;
-
-  // Sort top-k results in descending order by document score.
-  sort(results, results + kNumReturnedResults, ResultCompare());
 
   return total_num_results;
 }
