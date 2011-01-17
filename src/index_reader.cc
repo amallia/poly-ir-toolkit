@@ -463,15 +463,15 @@ void LexiconData::InitLayers(int num_layers, const int* num_docs, const int* num
   if (num_layers_ > 1) {
     additional_layers_ = new LayerInfo[num_layers_ - 1];
     for (int i = 1; i < num_layers_; ++i) {
-      additional_layers_[i].num_docs = num_docs[i];
-      additional_layers_[i].num_chunks = num_chunks[i];
-      additional_layers_[i].num_chunks_last_block = num_chunks_last_block[i];
-      additional_layers_[i].num_blocks = num_blocks[i];
-      additional_layers_[i].block_number = block_numbers[i];
-      additional_layers_[i].chunk_number = chunk_numbers[i];
-      additional_layers_[i].score_threshold = score_thresholds[i];
-      additional_layers_[i].external_index_offset = external_index_offsets[i];
-      additional_layers_[i].last_doc_ids = NULL;
+      additional_layers_[i - 1].num_docs = num_docs[i];
+      additional_layers_[i - 1].num_chunks = num_chunks[i];
+      additional_layers_[i - 1].num_chunks_last_block = num_chunks_last_block[i];
+      additional_layers_[i - 1].num_blocks = num_blocks[i];
+      additional_layers_[i - 1].block_number = block_numbers[i];
+      additional_layers_[i - 1].chunk_number = chunk_numbers[i];
+      additional_layers_[i - 1].score_threshold = score_thresholds[i];
+      additional_layers_[i - 1].external_index_offset = external_index_offsets[i];
+      additional_layers_[i - 1].last_doc_ids = NULL;
     }
   }
 }
