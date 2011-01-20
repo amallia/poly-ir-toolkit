@@ -236,10 +236,8 @@ struct AccumulatorScoreAscendingCompare {
  *
  **************************************************************************************************************************************************************/
 struct ResultCompare {
+  // Only compare the document score, don't care about order of same scoring documents.
   bool operator()(const Result& l, const Result& r) const {
-//    return l > r;
-
-    // TODO: Should be sufficient to compare only the score; we don't care about the order of docIDs that score the same.
     return l.first > r.first;
   }
 };

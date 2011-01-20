@@ -1435,7 +1435,9 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
 #ifdef IRTK_DEBUG
     cout << "Top Docs Layer for '" << string(query_term_data[i]->term(), query_term_data[i]->term_len())
         << "', Layer Num: 0, Score Threshold: " << list_data_pointers[i]->score_threshold()
-        << ", Num Docs: " << list_data_pointers[i]->num_docs() << endl;
+        << ", Num Docs: " << list_data_pointers[i]->num_docs()
+        << ", Num Blocks: " << list_data_pointers[i]->num_blocks()
+        << ", Num Chunks: " << list_data_pointers[i]->num_chunks() << endl;
 #endif
   }
 
@@ -1499,7 +1501,9 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
       cout << "Overlapping Layer for '" << string(query_term_data[i]->term(), query_term_data[i]->term_len())
           << "', Layer Num: " << (query_term_data[i]->num_layers() - 1)
           << ", Score Threshold: " << list_data_pointers[i]->score_threshold()
-          << ", Num Docs: " << list_data_pointers[i]->num_docs() << endl;
+          << ", Num Docs: " << list_data_pointers[i]->num_docs()
+          << ", Num Blocks: " << list_data_pointers[i]->num_blocks()
+          << ", Num Chunks: " << list_data_pointers[i]->num_chunks() << endl;
 #endif
     }
 
@@ -1704,13 +1708,15 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
 #ifdef IRTK_DEBUG
     cout << "Top Docs Layer for '" << string(query_term_data[i]->term(), query_term_data[i]->term_len())
         << "', Layer Num: 0, Score Threshold: " << list_data_pointers[i]->score_threshold()
-        << ", Num Docs: " << list_data_pointers[i]->num_docs() << endl;
+        << ", Num Docs: " << list_data_pointers[i]->num_docs()
+        << ", Num Blocks: " << list_data_pointers[i]->num_blocks()
+        << ", Num Chunks: " << list_data_pointers[i]->num_chunks() << endl;
 #endif
   }
 
   int total_num_results = 0;
   if (num_query_terms == 1) {
-    // Do standard DAAT OR mode processing, since WAND won't help.
+    // Do standard DAAT OR mode processing, since Max Score won't help.
     if (index_layered_ && query_term_data[0]->num_layers() == 2) {
       // We have two layers, so let's run the standard DAAT OR on the first layer only.
       // If there are k results, we can stop; otherwise rerun the query on the second layer.
@@ -1768,7 +1774,9 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
       cout << "Overlapping Layer for '" << string(query_term_data[i]->term(), query_term_data[i]->term_len())
           << "', Layer Num: " << (query_term_data[i]->num_layers() - 1)
           << ", Score Threshold: " << list_data_pointers[i]->score_threshold()
-          << ", Num Docs: " << list_data_pointers[i]->num_docs() << endl;
+          << ", Num Docs: " << list_data_pointers[i]->num_docs()
+          << ", Num Blocks: " << list_data_pointers[i]->num_blocks()
+          << ", Num Chunks: " << list_data_pointers[i]->num_chunks() << endl;
 #endif
     }
 
@@ -1824,23 +1832,14 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
 
     // When 'true', enables the use of embedded list score information to provide further efficiency gains
     // through better list skipping and less scoring computations.
-    const bool kScoreSkipping = true;
+    const bool kScoreSkipping = false;
 
     /*
      * For score skipping:
      *
-     * TODO: BLOCKS CAN HAVE MULTIPLE LISTS ---- Need a structure where the scores are per list.
-     * Maybe put it in an external file and load it into memory? The Lexicon can then have a pointer. Then it's easy to also extend this to per chunk.
-     *
-     * The 2nd layer will have lower threshold set than some of the blocks withing --- but this is because it's overlapping!
-     * This is fine though, because we always use the 1st layer as the actual threshold.
-     * What really is the problem, is that a block can have multiple lists and only one score upperbound --- need to fix this!!
-     *
-     *
      * Query: beneficiaries insurance irs life term
      * TODO: total_num_results counter overflows -- and we get a seg fault. WHY?
      */
-
 
     int i, j;
     int curr_list_idx;
@@ -2024,6 +2023,7 @@ int QueryProcessor::IntersectLists(ListData** lists, int num_lists, Result* resu
 }
 
 // Returns the total number of document results found in the intersection.
+// Note that there is not a guaranteed order of same scoring docIDs.
 int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, ListData** lists, int num_lists, Result* results, int num_results) {
   // We have a choice of whether to use a heap (push() / pop() an array) or just search through an array to replace low scoring results
   // and finally sorting it before returning the top-k results in sorted order.
@@ -2109,16 +2109,6 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
         f_d_t = index_reader_.GetFreq(lists[i], did);
         doc_len = index_reader_.GetDocLen(did);
         bm25_sum += idf_t[i] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
-
-//        //////////////////////TODO: DEBUG
-//        if(did == 3122798) {
-//          cout << "Partial score for list with idf: " << idf_t[i] << ", is: " << (idf_t[i] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len)) << endl;
-//        }
-//        ////////////////////
-
-        //////////////////////////////TODO
-        //        cout << "RESULT: " << "docID: " << did << ", score: " << bm25_sum << ", num_docs_complete_list: " << lists[i]->num_docs_complete_list() << ", f_d_t[i]: " << f_d_t[i] << endl;
-        //////////////////////////////
       }
 
       if (kUseArrayInsteadOfHeap) {
@@ -2129,19 +2119,6 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
             min_scoring_result = results + total_num_results;
         } else {
           if (bm25_sum > min_scoring_result->first) {
-            // TODO
-            // Since the heap method discriminates against lower docIDs if the score is the same, we should do the same here.
-            // The heap is a min heap, where the min document gets removed and a lower docID, given the same score, will cause the document with the
-            // lower docID to wind up on top of the heap.
-
-            // Here we actually discriminate against the lower scoring docIDs. If we insert multiple docIDs with the same score before we get k results,
-            // any other (higher) docIDs with the same score will be rejected.
-            // However, when we insert a new docID, we will remove the first document
-            // found that has the same minimum score, even if there are multiple documents with that same minimum score; that first document will have a lower docID
-            // since it was inserted first.
-
-            // Solution could be to insert documents with the same min score.
-
             // Replace the min scoring result with the current (higher scoring) result.
             min_scoring_result->first = bm25_sum;
             min_scoring_result->second = did;
