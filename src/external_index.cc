@@ -73,7 +73,7 @@ using namespace logger;
  *
  **************************************************************************************************************************************************************/
 ExternalBlock::ExternalBlock() :
-  block_max_score_(numeric_limits<float>::max()) {
+  block_max_score_(-numeric_limits<float>::max()) {
 }
 
 ExternalBlock::~ExternalBlock() {
@@ -113,10 +113,14 @@ void ExternalIndexBuilder::NewBlock() {
 // Means we also need to start a new block.
 void ExternalIndexBuilder::NewList() {
   ssize_t write_ret;
-  for(size_t i = 0; i < external_blocks_.size(); ++i) {
+//  cout << "Writing out New List!" << endl;
+
+  for (size_t i = 0; i < external_blocks_.size(); ++i) {
     const ExternalBlock& external_block = external_blocks_[i];
     int block_num_chunks = external_block.num_external_chunks();
     float block_max_score = external_block.block_max_score();
+
+//    cout << "Writing block with " << block_num_chunks << " chunks and max score of " << block_max_score << endl;
 
     write_ret = write(external_index_fd_, &block_num_chunks, sizeof(block_num_chunks));
     curr_offset_ += 1;
@@ -125,7 +129,7 @@ void ExternalIndexBuilder::NewList() {
     curr_offset_ += 1;
     assert(write_ret == sizeof(block_max_score));
 
-    for(int j = 0; j < block_num_chunks; ++j) {
+    for (int j = 0; j < block_num_chunks; ++j) {
       const ExternalChunk& external_chunk = external_block.external_chunk_num(j);
       float chunk_max_score = external_chunk.chunk_max_score();
 
@@ -183,11 +187,22 @@ void ExternalIndexReader::AdvanceToBlock(uint32_t block_num, ExternalIndexPointe
 // Decodes current block being pointed to by the 'external_index_pointer' and advances the pointer to the next block to be decoded.
 void ExternalIndexReader::DecodeBlock(ExternalIndexPointer* external_index_pointer) const {
   assert(sizeof(external_index_pointer->offset_curr) == sizeof(external_index_pointer->block_num_chunks));
+
+//  cout << "external_index_pointer->offset_curr: " << external_index_pointer->offset_curr << endl;
+
   memcpy(&external_index_pointer->block_num_chunks, external_index_ + external_index_pointer->offset_curr, sizeof(external_index_pointer->block_num_chunks));
+//  external_index_pointer->block_num_chunks = external_index_[external_index_pointer->offset_curr];
+//  cout << "external_index_pointer->block_num_chunks: " << external_index_pointer->block_num_chunks << endl;
+
   external_index_pointer->offset_curr += 1;
   memcpy(&external_index_pointer->block_max_score, external_index_ + external_index_pointer->offset_curr, sizeof(external_index_pointer->block_max_score));
+//  external_index_pointer->block_max_score = external_index_[external_index_pointer->offset_curr];
+//  cout << "external_index_pointer->block_max_score: " << external_index_pointer->block_max_score << endl;
+
+  external_index_pointer->offset_curr += 1;
   external_index_pointer->offset_curr += external_index_pointer->block_num_chunks;
-  ++external_index_pointer->block_num_curr;
+
+  external_index_pointer->block_num_curr += 1;
 }
 
 /**************************************************************************************************************************************************************

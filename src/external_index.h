@@ -46,11 +46,17 @@
 #ifndef EXTERNAL_INDEX_H_
 #define EXTERNAL_INDEX_H_
 
+// Enables debugging output for this module.
+#define EXTERNAL_INDEX_DEBUG
+
 #include <cassert>
 #include <cstddef>
 #include <cstring>
 #include <stdint.h>
 
+#ifdef EXTERNAL_INDEX_DEBUG
+#include <iostream>
+#endif
 #include <vector>
 
 #include <sys/types.h>
