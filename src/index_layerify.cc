@@ -181,10 +181,10 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
   while (index_->NextTerm()) {
     /////////////////////////////////////TODO skip layering lists to the ones we want for debugging.
-//    string curr_term = string(index_->curr_term(), index_->curr_term_len());
-//    if (!(curr_term == "beneficiaries" || curr_term == "insurance" || curr_term == "irs" || curr_term == "life"))
-//      continue;
-//    cout << "CURR TERM: " << curr_term << endl;
+    /*string curr_term = string(index_->curr_term(), index_->curr_term_len());
+    if (!(curr_term == "beneficiaries" || curr_term == "insurance" || curr_term == "irs" || curr_term == "life" || curr_term == "hello" || curr_term == "world"))
+      continue;
+    cout << "CURR TERM: " << curr_term << endl;*/
     //////////////////////////////////////
 
     // TODO: Probably want to reuse buffers, unless we need to resize...
