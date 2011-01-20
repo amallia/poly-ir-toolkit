@@ -436,11 +436,6 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
     }
   }
 
-  if (external_index_builder_ != NULL) {
-    // Send the chunk to the external index builder for further processing.
-    external_index_builder_->AddChunk(chunk);
-  }
-
   InvertedListMetaData* curr_lexicon_entry = ((lexicon_offset_ == 0) ? NULL : lexicon_[lexicon_offset_ - 1]);
   if (curr_lexicon_entry == NULL || (curr_lexicon_entry->term_len() != term_len
       || strncasecmp(curr_lexicon_entry->term(), term, curr_lexicon_entry->term_len()) != 0)) {
@@ -505,6 +500,12 @@ void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len
         curr_lexicon_entry->set_curr_layer_external_index_offset(external_index_builder_->curr_offset());
       insert_layer_offset_ = false;
     }
+  }
+
+  // Can insert a chunk only after we started a new list (if any) and recorded the offset for the external index.
+  if (external_index_builder_ != NULL) {
+    // Send the chunk to the external index builder for further processing.
+    external_index_builder_->AddChunk(chunk);
   }
 
   ++curr_chunk_number_;
