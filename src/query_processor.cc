@@ -100,24 +100,35 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
   LoadIndexProperties();
   PrintQueryingParameters();
 
-  // If the index resides in main memory or is memory mapped, we'll create a block level index to speed up "random" accesses and skips;
-  // this way we can skip right to the block we want.
   bool in_memory_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryResidentIndex), false);
   bool memory_mapped_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryMappedIndex), false);
+  bool use_block_level_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kUseBlockLevelIndex), false);
 
   // TODO: Using an in-memory block index (for standard DAAT-AND) does not provide us any benefit. Most likely, the blocks should be smaller, or we should instead index the chunk last docIDs.
   //       Sequential block search performs better than binary block search in this case.
-  if (memory_mapped_index || in_memory_index) {
+  //       This might be a better speed up for when the index is on disk and we are I/O bounded. If the index is in main memory,
+  //       the only improvement would be to avoid decoding the block header, and the overhead of that should be small.
+  if (use_block_level_index) {
+    cout << "Building in-memory block level index." << endl;
+    BuildBlockLevelIndex();
+  }
+  /*if (memory_mapped_index || in_memory_index) {
     if (query_algorithm_ != kDaatOr && query_algorithm_ != kTaatOr) {
       cout << "Building in-memory block level index." << endl;
       BuildBlockLevelIndex();
     }
-  }
+  }*/
 
   // A parameter for batch mode processing. Helps with running some experiments. We just define it here (but perhaps better to make it more configurable).
   // The percentage of total batch queries to use to generate statistics.
   // The rest of the queries will be used to warm up the cache.
   float percentage_test_queries = 0.01f;
+
+  // For the case where we run batch queries, input can either come from stdin or from a file.
+  // Reading input directly from a file is especially useful in case you can't redirect a file to stdin,
+  // like when using gdb to debug (or at least I can't figure out how to do redirection when using gdb).
+  string batch_query_input = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetStringValue(config_properties::kBatchQueryInputFile), false);
+  ifstream batch_query_file_stream;
 
   switch (query_mode_) {
     case kInteractive:
@@ -131,7 +142,15 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
       // and does not shuffle the queries prior to running them.
       percentage_test_queries = 1.0f;
     case kBatch:
-      RunBatchQueries(cin, percentage_test_queries);
+      if (batch_query_input.empty() || batch_query_input == "stdin" || batch_query_input == "cin") {
+        RunBatchQueries(cin, percentage_test_queries);
+      } else {
+        batch_query_file_stream.open(batch_query_input.c_str());
+        if (!batch_query_file_stream) {
+          GetErrorLogger().Log("Could not open batch query file '" + batch_query_input + "'.", true);
+        }
+        RunBatchQueries(batch_query_file_stream, percentage_test_queries);
+      }
       break;
     default:
       assert(false);
@@ -139,8 +158,6 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
   }
 
   // Output some querying statistics.
-  double total_cached_bytes_read = index_reader_.total_cached_bytes_read();
-  double total_disk_bytes_read = index_reader_.total_disk_bytes_read();
   double total_num_queries_issued = total_num_queries_;
 
   cout << "Number of queries executed: " << total_num_queries_ << endl;
@@ -161,8 +178,9 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
 
   cout << "\n";
   cout << "Per Query Statistics:\n";
-  cout << "  Average data read from cache: " << (total_cached_bytes_read / total_num_queries_issued / (1 << 20)) << " MiB\n";
-  cout << "  Average data read from disk: " << (total_disk_bytes_read / total_num_queries_issued / (1 << 20)) << " MiB\n";
+  cout << "  Average data read from cache: " << (index_reader_.total_cached_bytes_read() / total_num_queries_issued / (1 << 20)) << " MiB\n";
+  cout << "  Average data read from disk: " << (index_reader_.total_disk_bytes_read() / total_num_queries_issued / (1 << 20)) << " MiB\n";
+  cout << "  Average number of blocks skipped: " << (index_reader_.total_num_blocks_skipped() / total_num_queries_issued) << "\n";
 
   cout << "  Average query running time (latency): " << (total_querying_time_ / total_num_queries_issued * (1000)) << " ms\n";
 }
@@ -186,10 +204,13 @@ void QueryProcessor::LoadStopWordsList(const char* stop_words_list_filename) {
   }
 }
 
+// Create a block level index to speed up "random" accesses and skips.
 // We iterate through the lexicon and decode all the block headers for the current inverted list.
 // We then make a block level index by storing the last docID of each block for our current inverted list.
 // Each inverted list layer will have it's own block level index (pointed to by the lexicon).
 void QueryProcessor::BuildBlockLevelIndex() {
+  index_reader_.set_block_skipping_enabled(true);
+
   // We make one long array for keeping all the block level indices.
   int num_per_term_blocks = IndexConfiguration::GetResultValue(index_reader_.meta_info().GetNumericalValue(meta_properties::kTotalNumPerTermBlocks), true);
 
@@ -1832,13 +1853,16 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
 
     // When 'true', enables the use of embedded list score information to provide further efficiency gains
     // through better list skipping and less scoring computations.
-    const bool kScoreSkipping = false;
+    const bool kScoreSkipping = true;
 
     /*
      * For score skipping:
      *
      * Query: beneficiaries insurance irs life term
-     * TODO: total_num_results counter overflows -- and we get a seg fault. WHY?
+     *
+     * TODO: total_num_results overflows...
+     *
+     * TODO: Make option to use chunks instead of blocks for score skipping!
      */
 
     int i, j;
@@ -1849,19 +1873,20 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
 
     while (num_lists_remaining) {
       top = &list_upperbounds[0];
-      /*if (kScoreSkipping && threshold > list_upperbounds[1].first) {
-//        cout << "score skipping --- moving first list" << endl;TODO
+      if (kScoreSkipping && threshold > list_upperbounds[1].first) {
+//        cout << "score skipping --- moving first list" << endl;
 
         // Only the first (highest scoring) list can contain a docID that can still make it into the top-k,
         // so we move the first list to the first docID that has an upperbound that will allow it to make it into the top-k.
-        if ((lists_curr_postings[0] = index_reader_.NextGEQScore(list_data_pointers[list_upperbounds[0].second], threshold - list_upperbounds[1].first)) == numeric_limits<uint32_t>::max()) {
+        if ((lists_curr_postings[0] = index_reader_.NextGreaterScore(list_data_pointers[list_upperbounds[0].second], threshold - list_upperbounds[1].first)) == numeric_limits<uint32_t>::max()) {
+//          cout << "Early termination -- block score" << endl;
+
           // Can early terminate at this point.
           break;
         }
 
-        cout << "Skipping to docID: " << lists_curr_postings[0] << endl;
-
-      } else {*/
+//        cout << "Skipping to docID: " << lists_curr_postings[0] << endl;
+      } else {
         // Find the lowest docID that can still possibly make it into the top-k (while being able to make it into the top-k).
         for (i = 1; i < num_lists_remaining; ++i) {
           curr_list_idx = list_upperbounds[i].second;
@@ -1873,7 +1898,7 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
             top = &list_upperbounds[i];
           }
         }
-//      }
+      }
 
       // Check if we can early terminate. This might happen only after we have finished traversing at least one list.
       // This is because our upperbounds don't decrease unless we are totally finished traversing one list.
@@ -1900,24 +1925,50 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
         lists_curr_postings[curr_list_idx] = index_reader_.NextGEQ(list_data_pointers[curr_list_idx], curr_doc_id);
 
 
-        ///////////////////TODO: DEBUG
-        if (curr_doc_id == 25170420) {
-          cout << "Found it: " << curr_doc_id << endl;
-        }
-        ///////////////////////////////
+//        ///////////////////TODO: DEBUG
+//        if (curr_doc_id == 25170420) {
+//          cout << "Found it: " << curr_doc_id << endl;
+//        }
+//        ///////////////////////////////
 
 
         // Use the tighter score bound we have on the current list to see if we can early terminate the scoring of this particular docID.
         // TODO: To avoid the (i == num_lists_remaining - 1) test, can insert a dummy list with upperbound 0.
-        if (kScoreSkipping && threshold > bm25_sum + index_reader_.GetBlockScoreBound(list_data_pointers[curr_list_idx]) + ((i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first)) {
+        if (kScoreSkipping && /*lists_curr_postings[curr_list_idx] == curr_doc_id &&*/ threshold > bm25_sum + index_reader_.GetBlockScoreBound(list_data_pointers[curr_list_idx]) + ((i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first)) {
+//          cout << "bm25_sum: " << bm25_sum << endl;
+//          cout << "Curr block bound for docID: " << curr_doc_id << ", is: "<< index_reader_.GetBlockScoreBound(list_data_pointers[curr_list_idx]) << endl;
+//          cout << "List with # docs: " << list_data_pointers[curr_list_idx]->num_docs() << endl;
+//          cout << "threshold: " << threshold << endl;
+//          cout << "Remaining upperbounds: " << ((i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first) << endl;
 
-          cout << "Curr block bound for docID: " << curr_doc_id << ", is: "<< index_reader_.GetBlockScoreBound(list_data_pointers[curr_list_idx]) << endl;
-          cout << "List with # docs: " << list_data_pointers[curr_list_idx]->num_docs() << endl;
-          cout << "threshold: " << threshold << endl;
-          cout << "Remaining upperbounds: " << ((i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first) << endl;
-          // TODO: Maybe print what scores this upperbound conists of.
+          // TODO: Need to move the current list pointer forward and check if we can remove it...
 
-          --num_lists_remaining;
+          // Can now move the list pointer further.
+          lists_curr_postings[curr_list_idx] = index_reader_.NextGEQ(list_data_pointers[curr_list_idx], lists_curr_postings[curr_list_idx] + 1);
+          if (lists_curr_postings[curr_list_idx] == numeric_limits<uint32_t>::max()) {
+            /*if (kCompactArrayRightAway) {*/
+              --num_lists_remaining;
+              float curr_list_upperbound = list_thresholds[curr_list_idx];
+
+              // Compact the list upperbounds array.
+              for (j = i; j < num_lists_remaining; ++j) {
+                list_upperbounds[j] = list_upperbounds[j + 1];
+              }
+
+              // Recalculate the list upperbounds. Note that we only need to recalculate those entries less than i.
+              for (j = 0; j < i; ++j) {
+                list_upperbounds[j].first -= curr_list_upperbound;
+              }
+              --i;
+            /*} else {
+              compact_upperbounds = true;
+            }*/
+          }
+
+
+
+          // TODO: This is not necessary. It only terminates further scoring of the current document...
+          /*--num_lists_remaining;
           float curr_list_upperbound = list_thresholds[curr_list_idx];
 
           // Compact the list upperbounds array.
@@ -1928,7 +1979,10 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
           // Recalculate the list upperbounds. Note that we only need to recalculate those entries less than i.
           for (j = 0; j < i; ++j) {
             list_upperbounds[j].first -= curr_list_upperbound;
-          }
+          }*/
+
+
+
           break;
         }
 
@@ -1937,6 +1991,12 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
           f_d_t = index_reader_.GetFreq(list_data_pointers[curr_list_idx], lists_curr_postings[curr_list_idx]);
           doc_len = index_reader_.GetDocLen(lists_curr_postings[curr_list_idx]);
           bm25_sum += idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
+
+//          //////////////////////TODO
+//          if((idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len)) > 2.68 && (idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len)) < 2.69) {
+//            cout << "BM25 SUM " << bm25_sum << " from List with # docs: " << list_data_pointers[curr_list_idx]->num_docs() << endl;
+//          }
+//          //////////////////
 
           ++num_postings_scored_;
 
