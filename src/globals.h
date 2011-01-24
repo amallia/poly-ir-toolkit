@@ -37,13 +37,20 @@ namespace logger {
 class Logger;
 };
 
+// Use these to log various information.
 logger::Logger& GetDefaultLogger();
-
 logger::Logger& GetErrorLogger();
 
+// Functions that help with debugging.
+// DebugLog() will only output a message using the default logger if the debug flag is turned on.
+// Use DebugFlag() and SetDebugFlag() to get and set the debug flag, respectively.
+bool DebugFlag();
+void SetDebugFlag(bool flag);
+void DebugLog(const std::string& debug_message);
+
+// Helper templates that convert various types to strings (those that have a properly defined operator<<()).
 template<typename T>
   std::string Stringify(const T& t);
-
 template<typename T>
   std::string Stringify(const T& t) {
     std::ostringstream iss;

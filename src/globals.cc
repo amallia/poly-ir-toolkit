@@ -43,3 +43,20 @@ logger::Logger& GetErrorLogger() {
   static logger::Logger error_logger(STDERR_FILENO, true, Cleanup);  // Error Logger going to cerr.
   return error_logger;
 }
+
+// Default is set to true, so that we will have to explicitly turn it off when we don't want out debugging output to appear.
+static bool debug_flag = true;
+
+bool DebugFlag() {
+  return debug_flag;
+}
+
+void SetDebugFlag(bool flag) {
+  debug_flag = flag;
+}
+
+void DebugLog(const string& message) {
+  if (debug_flag) {
+    GetDefaultLogger().Log(message, false);
+  }
+}
