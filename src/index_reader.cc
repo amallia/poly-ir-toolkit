@@ -411,22 +411,22 @@ void ListData::BlockSequentialSearch(uint32_t doc_id) {
 void ListData::SkipToBlock(uint32_t skip_to_block_idx) {
   // Only load this block if we haven't already loaded this block or if we haven't loaded the first block yet.
   // Loading the first block is a special case because on every other call to AdvanceBlock() besides the first, there will already be a block loaded.
-  if ((skip_to_block_idx != curr_block_idx_ || !first_block_loaded_)) {
+  if (skip_to_block_idx > 0) {
+    // Only need to skip to the block when we have blocks to skip (otherwise, we'd be reseting the current block state).
     int num_blocks = skip_to_block_idx - curr_block_idx_;
-    if (skip_to_block_idx > 0) {
-      // Only need to skip to the block when we have blocks to skip (otherwise, we'd be reseting the current block state).
-      if (num_blocks > 0) {
-        set_prev_block_last_doc_id(last_doc_ids_[skip_to_block_idx - 1]);
-        SkipBlocks(num_blocks, 0);
-        // We don't count moving on to the next block as skipping a block.
-        if (num_blocks > 1) {
-          num_blocks_skipped_ += num_blocks - 1;
-        }
+    if (num_blocks > 0) {
+      set_prev_block_last_doc_id(last_doc_ids_[skip_to_block_idx - 1]);
+      SkipBlocks(num_blocks, 0);
+      // We don't count moving on to the next block as skipping a block.
+      if (num_blocks > 1) {
+        num_blocks_skipped_ += num_blocks - 1;
       }
-    } else {
+    }
+  } else {
+    if (!first_block_loaded_) {
       first_block_loaded_ = true;
-      assert(num_blocks == 0);  // In this case, 'num_blocks' should always be 0.
-      SkipBlocks(num_blocks, initial_chunk_num_);
+      assert((skip_to_block_idx - curr_block_idx_) == 0);
+      SkipBlocks(0, initial_chunk_num_);
     }
   }
 }
@@ -809,6 +809,15 @@ ListData* IndexReader::OpenList(const LexiconData& lex_data, int layer_num, bool
   return list;
 }
 
+void IndexReader::CloseList(ListData* list_data) {
+  total_cached_bytes_read_ += list_data->cached_bytes_read();
+  total_disk_bytes_read_ += list_data->disk_bytes_read();
+  ++total_num_lists_accessed_;
+  total_num_blocks_skipped_ += list_data->num_blocks_skipped();
+
+  delete list_data;
+}
+
 // TODO: Some potential improvements:
 // * For single word and OR type queries, we don't need to decode the block header, since we won't be doing any chunk skipping. This requires storing the size of
 //   the block header (in number of ints) so we can skip past it. We'd also need to decompress the entire chunk (even positions if there are any)
@@ -1119,15 +1128,6 @@ int IndexReader::LoopOverList(ListData* list_data, IndexDataType data_type) {
   }
 
   return count;
-}
-
-void IndexReader::CloseList(ListData* list_data) {
-  total_cached_bytes_read_ += list_data->cached_bytes_read();
-  total_disk_bytes_read_ += list_data->disk_bytes_read();
-  ++total_num_lists_accessed_;
-  total_num_blocks_skipped_ += list_data->num_blocks_skipped();
-
-  delete list_data;
 }
 
 int IndexReader::GetDocLen(uint32_t doc_id) {

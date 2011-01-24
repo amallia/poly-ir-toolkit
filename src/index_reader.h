@@ -407,7 +407,8 @@ public:
   }
 
   bool has_more() const {
-    return num_blocks_left_ != 0 && num_chunks_last_block_left_ != 0;
+    assert((num_chunks_last_block_left_ == 0) ? (num_blocks_left_ == 1) : true);
+    return num_chunks_last_block_left_ != 0;
   }
 
   int term_num() const {
@@ -451,7 +452,7 @@ private:
   CacheManager& cache_manager_;      // Used to retrieve blocks from the inverted list.
   BlockDecoder curr_block_decoder_;  // The current block being processed in this inverted list.
 
-  int layer_num_;                    //
+  int layer_num_;                    // The layer this list is part of.
   uint32_t initial_chunk_num_;       // The initial chunk number this list starts in.
   uint32_t initial_block_num_;       // The initial block number this list starts in.
   uint32_t curr_block_num_;          // The current block number we're up to during traversal of the inverted list.
@@ -471,15 +472,13 @@ private:
 
   // These help us keep track of the current position within an inverted list.
   int num_docs_left_;                // The number of documents we have left to traverse in this inverted list (it could be negative by the end).
-                                     // Only updated after NextGEQ() finishes with a chunk and moves on to the next one.
-                                     // Updated and used by the IndexReader in NextGEQ().
-  int num_chunks_last_block_left_;   //
-  int num_blocks_left_;              //
-  bool first_block_loaded_;          //
+  int num_chunks_last_block_left_;   // The number of chunks left to traverse from the last block (only updated when in the last block).
+  int num_blocks_left_;              // The number of blocks left to traverse in this inverted list.
+  bool first_block_loaded_;          // Set to true when the first block in this inverted list was loaded.
 
-  const uint32_t* last_doc_ids_;     //
-                                     //
-  float score_threshold_;            //
+  const uint32_t* last_doc_ids_;     // Pointer to the array of last docIDs of all the blocks in this list.
+
+  float score_threshold_;            // The maximum scoring partial score of any docID in this list.
 
   uint32_t prev_block_last_doc_id_;  // The last docID of the last chunk of the previous block. This is used by the IndexReader as necessary in NextGEQ().
                                      // It's necessary for the case when a list spans several blocks and the docIDs are gap coded, so that when decoding gaps
@@ -489,6 +488,7 @@ private:
 
   int term_num_;                     // May be used by the query processor to map this object back to the term it corresponds to.
 
+  // For simultaneous traversal of the external index (if any).
   ExternalIndexReader::ExternalIndexPointer external_index_pointer_;
   const ExternalIndexReader* external_index_reader_;
 
