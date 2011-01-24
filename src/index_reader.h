@@ -142,6 +142,14 @@ public:
     decoded_ = decoded;
   }
 
+  float chunk_max_score() const {
+    return chunk_max_score_;
+  }
+
+  void set_chunk_max_score(float chunk_max_score) {
+    chunk_max_score_ = chunk_max_score;
+  }
+
   // The maximum number of documents that can be contained within a chunk.
   static const int kChunkSize = CHUNK_SIZE;
   // The maximum number of properties per document.
@@ -171,6 +179,8 @@ private:
   const uint32_t* curr_buffer_position_;  // Pointer to the raw data of stuff we have to decode next.
 
   bool decoded_;  // True when we have decoded the docIDs.
+
+  float chunk_max_score_;  // The maximum partial docID score contained within this chunk.
 
   // Decompressors for various portions of the chunk.
   const CodingPolicy& doc_id_decompressor_;
@@ -352,12 +362,8 @@ public:
     return num_blocks_;
   }
 
-  void decrease_num_blocks_left(int num_blocks_less) {
-    num_blocks_left_ -= num_blocks_less;
-  }
-
-  void decrease_num_chunks_last_block_left(int num_chunks_last_block_less) {
-    num_chunks_last_block_left_ -= num_chunks_last_block_less;
+  uint32_t curr_block_num() const {
+    return curr_block_num_;
   }
 
   int num_chunks_last_block_left() const {
@@ -424,6 +430,10 @@ public:
     return disk_bytes_read_;
   }
 
+  uint32_t num_blocks_skipped() const {
+    return num_blocks_skipped_;
+  }
+
 private:
   void Init();
 
@@ -486,6 +496,7 @@ private:
 
   uint64_t cached_bytes_read_;       // Keeps track of the number of bytes read from the cache for this list.
   uint64_t disk_bytes_read_;         // Keeps track of the number of bytes read from the disk for this list.
+  uint32_t num_blocks_skipped_;      // Keeps track of the number of blocks we were able to skip (when using in-memory block index).
 };
 
 /**************************************************************************************************************************************************************
@@ -728,8 +739,9 @@ public:
   uint32_t NextGEQ(ListData* list_data, uint32_t doc_id);
 
   float GetBlockScoreBound(ListData* list_data);
+  float GetChunkScoreBound(ListData* list_data);
 
-  uint32_t NextGEQScore(ListData* list_data, float min_score);
+  uint32_t NextGreaterScore(ListData* list_data, float min_score);
 
   uint32_t GetFreq(ListData* list_data, uint32_t doc_id);
 
@@ -776,6 +788,14 @@ public:
     return includes_positions_;
   }
 
+  bool block_skipping_enabled() const {
+    return block_skipping_enabled_;
+  }
+
+  void set_block_skipping_enabled(bool block_skipping_enabled) {
+    block_skipping_enabled_ = block_skipping_enabled;
+  }
+
   const CodingPolicy& doc_id_decompressor() const {
     return doc_id_decompressor_;
   }
@@ -804,6 +824,10 @@ public:
     return total_num_lists_accessed_;
   }
 
+  uint32_t total_num_blocks_skipped() const {
+    return total_num_blocks_skipped_;
+  }
+
 private:
   Purpose purpose_;                    // Changes index reader behavior based on what we're using it for.
   DocumentOrder document_order_;       // The way the docIDs are ordered in the index.
@@ -816,6 +840,7 @@ private:
   bool includes_contexts_;             // True if the index contains context data.
   bool includes_positions_;            // True if the index contains position data.
   bool use_positions_;                 // A hint from an external source that allows us to speed up processing a bit if it doesn't require positions.
+  bool block_skipping_enabled_;        // An in-memory block level index has been built that we should use to skip entire blocks.
 
   const ExternalIndexReader* external_index_reader_;
 
@@ -828,6 +853,7 @@ private:
   uint64_t total_cached_bytes_read_;   // Keeps track of the number of bytes read from the cache.
   uint64_t total_disk_bytes_read_;     // Keeps track of the number of bytes read from the disk.
   uint64_t total_num_lists_accessed_;  // Keeps track of the total number of inverted lists that were accessed (updated at the time that the list is closed).
+  uint32_t total_num_blocks_skipped_;  // Keeps track of the total number of blocks that were skipped due to the in-memory block index.
 };
 
 /**************************************************************************************************************************************************************

@@ -73,6 +73,7 @@ ChunkDecoder::ChunkDecoder(const CodingPolicy& doc_id_decompressor, const Coding
   decoded_properties_(false),
   curr_buffer_position_(NULL),
   decoded_(false),
+  chunk_max_score_(numeric_limits<float>::max()),
   doc_id_decompressor_(doc_id_decompressor),
   frequency_decompressor_(frequency_decompressor),
   position_decompressor_(position_decompressor) {
@@ -88,6 +89,7 @@ void ChunkDecoder::InitChunk(const ChunkProperties& properties, const uint32_t* 
   decoded_properties_ = false;
   curr_buffer_position_ = buffer;
   decoded_ = false;
+  chunk_max_score_ = numeric_limits<float>::max();
 }
 
 void ChunkDecoder::DecodeDocIds() {
@@ -244,7 +246,8 @@ ListData::ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_c
   external_index_reader_(external_index_reader),
   single_term_query_(single_term_query),
   cached_bytes_read_(0),
-  disk_bytes_read_(0) {
+  disk_bytes_read_(0),
+  num_blocks_skipped_(0) {
   if (kReadAheadBlocks <= 0) {
     Configuration::ErroneousValue(config_properties::kReadAheadBlocks, Configuration::GetConfiguration().GetValue(config_properties::kReadAheadBlocks));
   }
@@ -298,6 +301,7 @@ void ListData::ResetList(bool single_term_query) {
   single_term_query_ = single_term_query;
   cached_bytes_read_ = 0;
   disk_bytes_read_ = 0;
+  num_blocks_skipped_ = 0;
 
   external_index_pointer_.Reset();
 
@@ -399,16 +403,21 @@ void ListData::SkipToBlock(uint32_t skip_to_block_idx) {
   // Loading the first block is a special case because on every other call to AdvanceBlock() besides the first, there will already be a block loaded.
   if ((skip_to_block_idx != curr_block_idx_ || !first_block_loaded_)) {
     int num_blocks = skip_to_block_idx - curr_block_idx_;
-    int initial_chunk_num;
     if (skip_to_block_idx > 0) {
-      initial_chunk_num = 0;
-      set_prev_block_last_doc_id(last_doc_ids_[skip_to_block_idx - 1]);
+      // Only need to skip to the block when we have blocks to skip (otherwise, we'd be reseting the current block state).
+      if (num_blocks > 0) {
+        set_prev_block_last_doc_id(last_doc_ids_[skip_to_block_idx - 1]);
+        SkipBlocks(num_blocks, 0);
+        // We don't count moving on to the next block as skipping a block.
+        if (num_blocks > 1) {
+          num_blocks_skipped_ += num_blocks - 1;
+        }
+      }
     } else {
-      initial_chunk_num = initial_chunk_num_;
       first_block_loaded_ = true;
+      assert(num_blocks == 0);  // In this case, 'num_blocks' should always be 0.
+      SkipBlocks(num_blocks, initial_chunk_num_);
     }
-
-    SkipBlocks(num_blocks, initial_chunk_num);
   }
 }
 
@@ -422,7 +431,16 @@ void ListData::AdvanceChunk() {
 
   // Adjust the number of chunks in the last block (only if we're in the last block).
   if (final_block()) {
-    decrease_num_chunks_last_block_left(1);
+    num_chunks_last_block_left_ -= 1;
+  }
+
+  // TODO: WORKING ON THIS!
+  if (external_index_reader_ != NULL) {
+    // Advance the external index pointer to the next chunk.
+    external_index_reader_->AdvanceChunk(&external_index_pointer_);
+
+    // Set the max score of the chunk, which we get from the external index.
+    curr_block_decoder_.curr_chunk_decoder()->set_chunk_max_score(external_index_pointer_.chunk_max_score);
   }
 }
 
@@ -719,6 +737,7 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
   includes_contexts_(IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesContexts), true)),
   includes_positions_(IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesPositions), true)),
   use_positions_(use_positions && includes_positions_),
+  block_skipping_enabled_(false),
   external_index_reader_(external_index_reader),
   doc_id_decompressor_(CodingPolicy::kDocId),
   frequency_decompressor_(CodingPolicy::kFrequency),
@@ -726,7 +745,8 @@ IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheMan
   block_header_decompressor_(CodingPolicy::kBlockHeader),
   total_cached_bytes_read_(0),
   total_disk_bytes_read_(0),
-  total_num_lists_accessed_(0) {
+  total_num_lists_accessed_(0),
+  total_num_blocks_skipped_(0) {
   if (kLexiconSize <= 0) {
     Configuration::ErroneousValue(config_properties::kLexiconSize, Configuration::GetConfiguration().GetValue(config_properties::kLexiconSize));
   }
@@ -800,8 +820,12 @@ uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
   // Additionally, we have to determine the number of chunks present in the last chunk of a list through the total number
   // of documents present in the list.
 
-  // TODO: Can you mix the binary search and sequential search for skipping blocks to optimize performance?
-  list_data->AdvanceBlock(doc_id);
+  // In-memory block level index has been built, so we can do block skipping.
+  if (block_skipping_enabled_) {
+    // TODO: Can you mix the binary search and sequential search for skipping blocks to optimize performance?
+    list_data->AdvanceBlock(doc_id);
+  }
+
 
   ChunkDecoder::ChunkProperties chunk_properties;
   chunk_properties.includes_contexts = includes_contexts_;
@@ -898,7 +922,7 @@ uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
   return std::numeric_limits<uint32_t>::max();
 }
 
-// Returns the upperbound score of the block on the current docID in the list.
+// Returns the upperbound score of the current block.
 float IndexReader::GetBlockScoreBound(ListData* list_data) {
   assert(list_data != NULL);
   BlockDecoder* block = list_data->curr_block_decoder();
@@ -906,22 +930,32 @@ float IndexReader::GetBlockScoreBound(ListData* list_data) {
   return block->block_max_score();
 }
 
-// Returns the next docID that has a score of at least 'min_score'.
-// TODO: Should this be strictly greater --- having an equal score won't put us into the top-k.
-uint32_t IndexReader::NextGEQScore(ListData* list_data, float min_score) {
+// Returns the upperbound score of the current chunk.
+float IndexReader::GetChunkScoreBound(ListData* list_data) {
+  assert(list_data != NULL);
+  BlockDecoder* block = list_data->curr_block_decoder();
+  assert(block != NULL);
+  ChunkDecoder* chunk = block->curr_chunk_decoder();
+  assert(chunk != NULL);
+  // TODO
+//  return chunk->max_score();
+}
+
+// Returns the next docID that has a score greater than 'min_score'.
+uint32_t IndexReader::NextGreaterScore(ListData* list_data, float min_score) {
   while (list_data->has_more()) {
-    if (list_data->curr_block_decoder()->block_max_score() < min_score) {
+    if (list_data->curr_block_decoder()->block_max_score() <= min_score) {
 //      return NextGEQ(list_data, 0);
 
       list_data->AdvanceBlock();
       cout << "Skipping block!" << endl;//TODO
     } else {
-      cout << "No block skipping!" << endl;//TODO
+//      cout << "No block skipping!" << endl;//TODO
       return NextGEQ(list_data, 0);
     }
   }
 
-  // No other blocks in this list have a score >= 'min_score', so return this sentinel value to indicate this.
+  // No other blocks in this list have a score > 'min_score', so return this sentinel value to indicate this.
   return std::numeric_limits<uint32_t>::max();
 }
 
@@ -1081,6 +1115,7 @@ void IndexReader::CloseList(ListData* list_data) {
   total_cached_bytes_read_ += list_data->cached_bytes_read();
   total_disk_bytes_read_ += list_data->disk_bytes_read();
   ++total_num_lists_accessed_;
+  total_num_blocks_skipped_ += list_data->num_blocks_skipped();
 
   delete list_data;
 }
