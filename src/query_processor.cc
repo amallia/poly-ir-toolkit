@@ -100,14 +100,14 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
   LoadIndexProperties();
   PrintQueryingParameters();
 
-  bool in_memory_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryResidentIndex), false);
-  bool memory_mapped_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryMappedIndex), false);
+  /*bool in_memory_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryResidentIndex), false);
+  bool memory_mapped_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryMappedIndex), false);*/
   bool use_block_level_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kUseBlockLevelIndex), false);
 
   // TODO: Using an in-memory block index (for standard DAAT-AND) does not provide us any benefit. Most likely, the blocks should be smaller, or we should instead index the chunk last docIDs.
   //       Sequential block search performs better than binary block search in this case.
-  //       This might be a better speed up for when the index is on disk and we are I/O bounded. If the index is in main memory,
-  //       the only improvement would be to avoid decoding the block header, and the overhead of that should be small.
+  //       This might be a better speed up for when the index is on disk and we are I/O bounded. Then we should also configure so we don't read ahead many blocks at a time.
+  //       If the index is in main memory, the only improvement would be to avoid decoding the block header, and the overhead of that should be small.
   if (use_block_level_index) {
     cout << "Building in-memory block level index." << endl;
     BuildBlockLevelIndex();
