@@ -184,20 +184,22 @@ void ExternalIndexReader::AdvanceToBlock(uint32_t block_num, ExternalIndexPointe
   }
 }
 
+void ExternalIndexReader::AdvanceChunk(ExternalIndexPointer* external_index_pointer) const {
+//  while (external_index_pointer->block_num_curr <= block_num) {
+//    DecodeBlock(external_index_pointer);
+//  }
+}
+
 // Decodes current block being pointed to by the 'external_index_pointer' and advances the pointer to the next block to be decoded.
 void ExternalIndexReader::DecodeBlock(ExternalIndexPointer* external_index_pointer) const {
   assert(sizeof(external_index_pointer->offset_curr) == sizeof(external_index_pointer->block_num_chunks));
 
-//  cout << "external_index_pointer->offset_curr: " << external_index_pointer->offset_curr << endl;
-
   memcpy(&external_index_pointer->block_num_chunks, external_index_ + external_index_pointer->offset_curr, sizeof(external_index_pointer->block_num_chunks));
 //  external_index_pointer->block_num_chunks = external_index_[external_index_pointer->offset_curr];
-//  cout << "external_index_pointer->block_num_chunks: " << external_index_pointer->block_num_chunks << endl;
 
   external_index_pointer->offset_curr += 1;
   memcpy(&external_index_pointer->block_max_score, external_index_ + external_index_pointer->offset_curr, sizeof(external_index_pointer->block_max_score));
 //  external_index_pointer->block_max_score = external_index_[external_index_pointer->offset_curr];
-//  cout << "external_index_pointer->block_max_score: " << external_index_pointer->block_max_score << endl;
 
   external_index_pointer->offset_curr += 1;
   external_index_pointer->offset_curr += external_index_pointer->block_num_chunks;
@@ -215,7 +217,8 @@ ExternalIndexReader::ExternalIndexPointer::ExternalIndexPointer(uint32_t block_n
   block_num_start(block_num),
   block_num_curr(block_num_start),
   block_num_chunks(0),
-  block_max_score(numeric_limits<float>::max()) {
+  block_max_score(numeric_limits<float>::max()),
+  chunk_max_score(numeric_limits<float>::max()) {
 }
 
 void ExternalIndexReader::ExternalIndexPointer::Reset() {
@@ -223,4 +226,5 @@ void ExternalIndexReader::ExternalIndexPointer::Reset() {
   block_num_curr = block_num_start;
   block_num_chunks = 0;
   block_max_score = numeric_limits<float>::max();
+  chunk_max_score = numeric_limits<float>::max();
 }

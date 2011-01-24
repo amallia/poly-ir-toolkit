@@ -199,12 +199,15 @@ public:
     // The data for the current block.
     int block_num_chunks;
     float block_max_score;
+    float chunk_max_score;
   };
 
   ExternalIndexReader(const char* external_index_filename);
   ~ExternalIndexReader();
 
   void AdvanceToBlock(uint32_t block_num, ExternalIndexPointer* external_index_pointer) const;
+
+  void AdvanceChunk(ExternalIndexPointer* external_index_pointer) const;
 
 private:
   void DecodeBlock(ExternalIndexPointer* external_index_pointer) const;
