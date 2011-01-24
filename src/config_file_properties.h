@@ -127,6 +127,13 @@ static const char kMaxNumberResults[] = "max_number_results";
 // Controls whether positions will be utilized if the index was built with positions.
 static const char kUsePositions[] = "use_positions";
 
+// Controls whether an in-memory block level index will be built on startup and used to skip fetching/decoding unnecessary blocks.
+static const char kUseBlockLevelIndex[] = "use_block_level_index";
+
+// Controls from where batch query input will come from.
+// Valid values are either 'stdin'/'cin' or the path to the batch query file.
+static const char kBatchQueryInputFile[] = "batch_query_input_file";
+
 /**************************************************************************************************************************************************************
  * Index DocID Remapping Parameters
  *
