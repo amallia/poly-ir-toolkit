@@ -185,9 +185,9 @@ void ExternalIndexReader::AdvanceToBlock(uint32_t block_num, ExternalIndexPointe
 }
 
 void ExternalIndexReader::AdvanceChunk(ExternalIndexPointer* external_index_pointer) const {
-//  while (external_index_pointer->block_num_curr <= block_num) {
-//    DecodeBlock(external_index_pointer);
-//  }
+  // We always advance through every chunk in a block (though we don't decode every chunk in the primary index).
+  memcpy(&external_index_pointer->chunk_max_score, external_index_ + external_index_pointer->offset_curr, sizeof(external_index_pointer->chunk_max_score));
+  external_index_pointer->offset_curr += 1;
 }
 
 // Decodes current block being pointed to by the 'external_index_pointer' and advances the pointer to the next block to be decoded.
@@ -202,7 +202,7 @@ void ExternalIndexReader::DecodeBlock(ExternalIndexPointer* external_index_point
 //  external_index_pointer->block_max_score = external_index_[external_index_pointer->offset_curr];
 
   external_index_pointer->offset_curr += 1;
-  external_index_pointer->offset_curr += external_index_pointer->block_num_chunks;
+//  external_index_pointer->offset_curr += external_index_pointer->block_num_chunks; // TODO: Only if we won't be decoding chunks.
 
   external_index_pointer->block_num_curr += 1;
 }
