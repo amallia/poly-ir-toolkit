@@ -153,6 +153,9 @@ void ChunkDecoder::UpdatePropertiesOffset() {
 /**************************************************************************************************************************************************************
  * BlockDecoder
  *
+ * TODO: For certain types of queries (single word), we can avoid decompressing the block header (since we won't be able to do chunk skipping).
+ *       To implement, we need an additional piece of data -- the integer offset into the first block to the chunk in which the list starts.
+ *       This can be stored in the lexicon.
  **************************************************************************************************************************************************************/
 const int BlockDecoder::kBlockSize;                              // Initialized in the class definition.
 const int BlockDecoder::kChunkSizeLowerBound;                    // Initialized in the class definition.
@@ -213,6 +216,11 @@ int BlockDecoder::DecodeHeader(uint32_t* compressed_header) {
 /**************************************************************************************************************************************************************
  * ListData
  *
+ * There are two possible ways to track when a list has been fully traversed:
+ * * Number of documents remaining in the list.
+ * * Number of blocks remaining and number of chunks remaining in the last block.
+ * The latter method should be used if we are utilizing a block level index and whole blocks can be skipped (so that we don't know how many documents were in
+ * the block).
  **************************************************************************************************************************************************************/
 ListData::ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
                    int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
@@ -321,8 +329,10 @@ void ListData::SkipBlocks(int num_blocks, uint32_t initial_chunk_num) {
   // Load the block we need plus the next few blocks in advance.
   if (num_blocks_left_ > 0) {
     // Read ahead the next several MBs worth of blocks, but not past the length of the list.
-    if (curr_block_num_ == last_queued_block_num_) {
-      last_queued_block_num_ += min(kReadAheadBlocks, num_blocks_left_);
+    // We also take into account that 'curr_block_num' could be greater than the 'last_queued_block_num_'
+    // if the we're using an in-memory block level index.
+    if (curr_block_num_ >= last_queued_block_num_) {
+      last_queued_block_num_ = curr_block_num_ + min(kReadAheadBlocks, num_blocks_left_);
       int disk_blocks_read = cache_manager_.QueueBlocks(curr_block_num_, last_queued_block_num_);
       int cached_blocks_read = (last_queued_block_num_ - curr_block_num_) - disk_blocks_read;
       disk_bytes_read_ += disk_blocks_read * CacheManager::kBlockSize;
@@ -434,7 +444,6 @@ void ListData::AdvanceChunk() {
     num_chunks_last_block_left_ -= 1;
   }
 
-  // TODO: WORKING ON THIS!
   if (external_index_reader_ != NULL) {
     // Advance the external index pointer to the next chunk.
     external_index_reader_->AdvanceChunk(&external_index_pointer_);
@@ -826,7 +835,6 @@ uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
     list_data->AdvanceBlock(doc_id);
   }
 
-
   ChunkDecoder::ChunkProperties chunk_properties;
   chunk_properties.includes_contexts = includes_contexts_;
   chunk_properties.includes_positions = includes_positions_;
@@ -937,8 +945,7 @@ float IndexReader::GetChunkScoreBound(ListData* list_data) {
   assert(block != NULL);
   ChunkDecoder* chunk = block->curr_chunk_decoder();
   assert(chunk != NULL);
-  // TODO
-//  return chunk->max_score();
+  return chunk->chunk_max_score();
 }
 
 // Returns the next docID that has a score greater than 'min_score'.
@@ -1051,29 +1058,32 @@ int IndexReader::GetList(ListData* list_data, IndexDataType data_type, uint32_t*
   return curr_index_data_idx;
 }
 
-// TODO: CHECK WHETHER THIS IS OK WITH THE RECENT UPDATES TO THE LIST_DATA!!!
-// TODO: Would be useful to store the total number of chunks contained in a block and the size of the block header
-//       (Note: this is implemented now --- can make use of it).
 int IndexReader::LoopOverList(ListData* list_data, IndexDataType data_type) {
   assert(list_data != NULL);
 
+  ChunkDecoder::ChunkProperties chunk_properties;
+  chunk_properties.includes_contexts = includes_contexts_;
+  chunk_properties.includes_positions = includes_positions_;
+
+  int k;
+  BlockDecoder* block;
+  ChunkDecoder* chunk;
+  uint32_t curr_frequency;
+
   int count = 0;
 
-  uint32_t curr_frequency;
+  // We can use the number of documents left in a list to see if we finished traversing the list
+  // because we'll never be doing any block skipping (we're only traversing a single list).
   while (list_data->num_docs_left() > 0) {
-    BlockDecoder* block = list_data->curr_block_decoder();
+    block = list_data->curr_block_decoder();
 
-    int curr_chunk_num = block->curr_chunk();
-    if (curr_chunk_num < block->num_chunks()) {
-      ChunkDecoder* chunk = block->curr_chunk_decoder();
+    if (block->curr_chunk() < block->num_chunks()) {
+      chunk = block->curr_chunk_decoder();
       // Create a new chunk and add it to the block.
-      ChunkDecoder::ChunkProperties chunk_properties;
-      chunk_properties.includes_contexts = includes_contexts_;
-      chunk_properties.includes_positions = includes_positions_;
       chunk->InitChunk(chunk_properties, block->curr_block_data(), std::min(ChunkDecoder::kChunkSize, list_data->num_docs_left()));
       chunk->DecodeDocIds();
 
-      for (int k = 0; k < chunk->num_docs(); ++k) {
+      for (k = 0; k < chunk->num_docs(); ++k) {
         switch (data_type) {
           case kDocId:
             chunk->doc_id(k);
