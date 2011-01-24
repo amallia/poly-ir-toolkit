@@ -494,12 +494,13 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
 void LoopOverIndexData(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
                        const char* term, int term_len, bool in_memory_index, bool memory_mapped_index) {
   CacheManager* cache_policy;
-  if (memory_mapped_index)
+  if (memory_mapped_index) {
     cache_policy = new MemoryMappedCachePolicy(index_filename);  // Memory maps the index.
-  else if (in_memory_index)
+  } else if (in_memory_index) {
     cache_policy = new FullContiguousCachePolicy(index_filename);  // Loads the index fully into main memory.
-  else
+  } else {
     cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
+  }
 
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, lexicon_filename, doc_map_filename,
                                               meta_info_filename, true);
@@ -518,7 +519,10 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
   }
 
   // What type of data we want to retrieve from the inverted list.
-  IndexReader::IndexDataType data_type = IndexReader::kDocId;  // Decode only the docIDs.
+  IndexReader::IndexDataType data_type;
+  //data_type = IndexReader::kDocId;      // Decodes only the docIDs.
+  //data_type = IndexReader::kFrequency;  // Decodes the docIDs and the frequencies. TODO: docIDs should not be decoded by default.
+  data_type = IndexReader::kPosition;   // Decodes docIDs, frequencies, and positions (for positions, frequency must be decoded as well).
 
   ListData* list_data = index_reader->OpenList(*lex_data, 0);
 
@@ -818,6 +822,7 @@ int main(int argc, char** argv) {
                                       { "loop-over-index-data", required_argument, NULL, 0 },             // Loops over an inverted list (decompresses but does not do any top-k). Useful for benchmarking decompression coders.
                                       { "in-memory-index", no_argument, NULL, 0 },                        // Loads the index into main memory.
                                       { "memory-map-index", no_argument, NULL, 0 },                       // Memory maps the index into our address space.
+                                      { "block-level-index", no_argument, NULL, 0 },                      // Builds an in-memory block level index.
                                       { "doc-mapping-file", required_argument, NULL, 0 },                 // Specify the document mapping file to use for the remap procedure.
                                       { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },  // Generates a docID mapping file (docIDs are remapped by URL) that can be used as input to the remap procedure.
                                       { "config-options", required_argument, NULL, 0 },                   // Overrides/adds options defined in the configuration file.
@@ -938,6 +943,8 @@ int main(int argc, char** argv) {
         } else if (strcmp("memory-map-index", long_opts[long_index].name) == 0) {
           command_line_args.memory_mapped_index = true;
           SetConfigurationOption(string(config_properties::kMemoryMappedIndex) + string("=true"));
+        } else if (strcmp("block-level-index", long_opts[long_index].name) == 0) {
+          SetConfigurationOption(string(config_properties::kUseBlockLevelIndex) + string("=true"));
         } else if (strcmp("doc-mapping-file", long_opts[long_index].name) == 0) {
           command_line_args.doc_mapping_file = new char[strlen(optarg)];
           memcpy(command_line_args.doc_mapping_file, optarg, strlen(optarg));
