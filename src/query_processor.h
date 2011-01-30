@@ -31,6 +31,13 @@
 #ifndef QUERY_PROCESSOR_H_
 #define QUERY_PROCESSOR_H_
 
+// Enables debugging output for this module.
+//#define QUERY_PROCESSOR_DEBUG
+
+// Enables debugging output for various query algorithms.
+//#define MAX_SCORE_DEBUG
+//#define WAND_DEBUG
+
 #include <cassert>
 #include <stdint.h>
 

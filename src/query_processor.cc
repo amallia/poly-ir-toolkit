@@ -72,8 +72,7 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
                   (Configuration::GetConfiguration().GetValue(config_properties::kMemoryResidentIndex) == "true") ?
                     static_cast<CacheManager*> (new FullContiguousCachePolicy(index_filename)) :
                     static_cast<CacheManager*> (new LruCachePolicy(index_filename)))),
-  index_reader_(IndexReader::kRandomQuery, IndexReader::kSortedGapCoded, *cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename, use_positions_,
-                external_index_reader_),
+  index_reader_(IndexReader::kRandomQuery, *cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename, use_positions_, external_index_reader_),
   index_layered_(false),
   index_overlapping_layers_(false),
   index_num_layers_(1),
@@ -209,6 +208,8 @@ void QueryProcessor::LoadStopWordsList(const char* stop_words_list_filename) {
 // We then make a block level index by storing the last docID of each block for our current inverted list.
 // Each inverted list layer will have it's own block level index (pointed to by the lexicon).
 void QueryProcessor::BuildBlockLevelIndex() {
+  /*SetDebugFlag(false);*/
+
   index_reader_.set_block_skipping_enabled(true);
 
   // We make one long array for keeping all the block level indices.
@@ -231,20 +232,20 @@ void QueryProcessor::BuildBlockLevelIndex() {
         curr_term_entry->set_last_doc_ids_layer_ptr(block_level_index + block_level_index_pos, i);
 
         while (num_chunks_left > 0) {
-          BlockDecoder* block = list_data->curr_block_decoder();
+          const BlockDecoder& block = list_data->curr_block_decoder();
 
           // We index only the last chunk in each block that's related to our current term.
           // So we always use the last chunk in a block, except the last block of this list, since that last chunk might belong to another list.
-          int total_num_chunks = block->num_chunks();  // The total number of chunks in our current block.
-          int chunk_num = block->starting_chunk() + num_chunks_left;
+          int total_num_chunks = block.num_chunks();  // The total number of chunks in our current block.
+          int chunk_num = block.starting_chunk() + num_chunks_left;
           int last_list_chunk_in_block = ((total_num_chunks > chunk_num) ? chunk_num : total_num_chunks);
 
-          uint32_t last_block_doc_id = block->chunk_last_doc_id(last_list_chunk_in_block - 1);
+          uint32_t last_block_doc_id = block.chunk_last_doc_id(last_list_chunk_in_block - 1);
 
           assert(block_level_index_pos < num_per_term_blocks);
           block_level_index[block_level_index_pos++] = last_block_doc_id;
 
-          num_chunks_left -= block->num_actual_chunks();
+          num_chunks_left -= block.num_actual_chunks();
 
           if (num_chunks_left > 0) {
             // We're moving on to process the next block. This block is of no use to us anymore.
@@ -262,6 +263,8 @@ void QueryProcessor::BuildBlockLevelIndex() {
 
   // Reset statistics about how much we read from disk/cache and how many lists we accessed.
   index_reader_.ResetStats();
+
+  /*SetDebugFlag(true);*/
 }
 
 void QueryProcessor::AcceptQuery() {
@@ -725,7 +728,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
   int num_top_k_scores = 0;
   float threshold = 0;
 
-  while ((curr_doc_id = index_reader_.NextGEQ(list, curr_doc_id)) < numeric_limits<uint32_t>::max()) {
+  while ((curr_doc_id = list->NextGEQ(curr_doc_id)) < ListData::kNoMoreDocs) {
     // Search for an accumulator corresponding to the current docID or insert if not found.
     while (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id < curr_doc_id) {
       // TODO: Maintain the threshold score.
@@ -736,7 +739,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
     }
 
     // Compute partial BM25 sum.
-    f_d_t = index_reader_.GetFreq(list, curr_doc_id);
+    f_d_t = list->GetFreq();
     doc_len = index_reader_.GetDocLen(curr_doc_id);
     partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
@@ -835,10 +838,10 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
 //    ///////////////////////
 
     ////// TODO: NextGEQOld works correctly, the new one has a bug, doesn't find docID 1201796...
-    curr_doc_id = index_reader_.NextGEQ(list, accumulators[accumulator_offset].doc_id);
+    curr_doc_id = list->NextGEQ(accumulators[accumulator_offset].doc_id);
     if (curr_doc_id == accumulators[accumulator_offset].doc_id) {
       // Compute partial BM25 sum.
-      f_d_t = index_reader_.GetFreq(list, curr_doc_id);
+      f_d_t = list->GetFreq();
       doc_len = index_reader_.GetDocLen(curr_doc_id);
       partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
@@ -1159,7 +1162,6 @@ int QueryProcessor::ProcessLayeredQuery(LexiconData** query_term_data, int num_q
   return total_num_results;
 }
 
-
 // Merges the lists into an in-memory list that only contains docIDs; it also removes duplicate docIDs that might be present in multiple lists.
 // We do not score any documents here.
 // TODO: We can also potentially score documents here and keep track of which lists the score came from, then we'd have to do less work scoring
@@ -1172,7 +1174,7 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, uint32_t* merged
   // Initialize the heap.
   for (int i = 0; i < num_lists; ++i) {
     uint32_t curr_doc_id;
-    if ((curr_doc_id = index_reader_.NextGEQ(lists[i], 0)) < numeric_limits<uint32_t>::max()) {
+    if ((curr_doc_id = lists[i]->NextGEQ(0)) < ListData::kNoMoreDocs) {
       heap[heap_size++] = make_pair(curr_doc_id, i);
     }
   }
@@ -1195,7 +1197,7 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, uint32_t* merged
     pop_heap(heap, heap + heap_size, greater<pair<uint32_t, int> >());
 
     uint32_t curr_doc_id;
-    if ((curr_doc_id = index_reader_.NextGEQ(lists[top.second], top.first + 1)) < numeric_limits<uint32_t>::max()) {
+    if ((curr_doc_id = lists[top.second]->NextGEQ(top.first + 1)) < ListData::kNoMoreDocs) {
       heap[heap_size - 1] = make_pair(curr_doc_id, top.second);
       // TODO: OR Instead of making a new pair, can just update the pair, with the correct docID, and (possibly the list idx?, might depend on whether the heap size decreased previously).
       //       or maybe use the 'top' we have created.
@@ -1258,7 +1260,7 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
   int num_lists_remaining = 0; // The number of lists with postings remaining.
   for (int i = 0; i < num_lists; ++i) {
     uint32_t curr_doc_id;
-    if ((curr_doc_id = index_reader_.NextGEQ(lists[i], 0)) < numeric_limits<uint32_t>::max()) {
+    if ((curr_doc_id = lists[i]->NextGEQ(0)) < ListData::kNoMoreDocs) {
       lists_curr_postings[num_lists_remaining++] = make_pair(curr_doc_id, i);
     }
   }
@@ -1305,13 +1307,13 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
       while (top != &lists_curr_postings[num_lists_remaining]) {
         if(top->first == curr_doc_id) {
           // Compute BM25 score from frequencies.
-          f_d_t = index_reader_.GetFreq(lists[top->second], top->first);
+          f_d_t = lists[top->second]->GetFreq();
           doc_len = index_reader_.GetDocLen(top->first);
           bm25_sum += idf_t[top->second] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
           ++num_postings_scored_;
 
-          if ((top->first = index_reader_.NextGEQ(lists[top->second], top->first + 1)) == numeric_limits<uint32_t>::max()) {
+          if ((top->first = lists[top->second]->NextGEQ(top->first + 1)) == ListData::kNoMoreDocs) {
             // Need to compact the array by one.
             // Just copy over the last value in the array and overwrite the top value, since we'll be removing it.
             // Now, we can declare our list one shorter.
@@ -1341,11 +1343,16 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
       ++total_num_results;
     } else {
       // Compute BM25 score from frequencies.
-      f_d_t = index_reader_.GetFreq(lists[top->second], top->first);
+      f_d_t = lists[top->second]->GetFreq();
       doc_len = index_reader_.GetDocLen(top->first);
       partial_bm25_sum = idf_t[top->second] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
       ++num_postings_scored_;
+
+#ifdef QUERY_PROCESSOR_DEBUG
+      // Set 'kScoreCompleteDoc' to false to use this code path.
+      cout << "doc_id: " << top->first << ", bm25: " << partial_bm25_sum << endl;
+#endif
 
       // When we encounter the same docID as the current we'be been processing, we update it's score.
       // Otherwise, we know we're processing a new docID.
@@ -1375,7 +1382,7 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
       }
 
       uint32_t next_doc_id;
-      if ((next_doc_id = index_reader_.NextGEQ(lists[top->second], top->first + 1)) < numeric_limits<uint32_t>::max()) {
+      if ((next_doc_id = lists[top->second]->NextGEQ(top->first + 1)) < ListData::kNoMoreDocs) {
         if (kUseArrayInsteadOfHeapList) {
           top->first = next_doc_id;
         } else {
@@ -1557,7 +1564,7 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
     int num_lists_remaining = 0; // The number of lists with postings remaining.
     uint32_t curr_doc_id;
     for (int i = 0; i < num_query_terms; ++i) {
-      if ((curr_doc_id = index_reader_.NextGEQ(list_data_pointers[i], 0)) < numeric_limits<uint32_t>::max()) {
+      if ((curr_doc_id = list_data_pointers[i]->NextGEQ(0)) < ListData::kNoMoreDocs) {
         lists_curr_postings[num_lists_remaining++] = make_pair(curr_doc_id, i);
       }
     }
@@ -1590,9 +1597,9 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
       }
 
       /*
-      // If using this, change the while condition to true. Don't need to check for sentinel value after nextGEQ(),
+      // If using this, change the while condition to true. Don't need to check for sentinel value after NextGEQ(),
       // but need to sort all the list postings at each step.
-      if(pivot.first == numeric_limits<uint32_t>::max()) {
+      if(pivot.first == ListData::kNoMoreDocs) {
         break;
       }
       */
@@ -1609,14 +1616,14 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
         bm25_sum = 0;
         for(i = 0; i < num_lists_remaining && pivot.first == lists_curr_postings[i].first; ++i) {
           // Compute the BM25 score from frequencies.
-          f_d_t = index_reader_.GetFreq(list_data_pointers[lists_curr_postings[i].second], lists_curr_postings[i].first);
+          f_d_t = list_data_pointers[lists_curr_postings[i].second]->GetFreq();
           doc_len = index_reader_.GetDocLen(lists_curr_postings[i].first);
           bm25_sum += idf_t[lists_curr_postings[i].second] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
           ++num_postings_scored_;
 
           // Advance list pointer.
-          if ((lists_curr_postings[i].first = index_reader_.NextGEQ(list_data_pointers[lists_curr_postings[i].second], lists_curr_postings[i].first + 1)) == numeric_limits<uint32_t>::max()) {
+          if ((lists_curr_postings[i].first = list_data_pointers[lists_curr_postings[i].second]->NextGEQ(lists_curr_postings[i].first + 1)) == ListData::kNoMoreDocs) {
             // Compact the array. Move the current posting to the end.
             --num_lists_remaining;
             pair<uint32_t, int> curr = lists_curr_postings[i];
@@ -1656,7 +1663,7 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
         if (kMWand) {
           for (i = 0; i < num_lists_remaining; ++i) {
             // Advance list pointer.
-            if ((lists_curr_postings[i].first = index_reader_.NextGEQ(list_data_pointers[lists_curr_postings[i].second], pivot.first)) == numeric_limits<uint32_t>::max()) {
+            if ((lists_curr_postings[i].first = list_data_pointers[lists_curr_postings[i].second]->NextGEQ(pivot.first)) == ListData::kNoMoreDocs) {
               // Compact the array. Move the current posting to the end.
               --num_lists_remaining;
               pair<uint32_t, int> curr = lists_curr_postings[i];
@@ -1668,7 +1675,7 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
             }
           }
         } else {
-          if ((lists_curr_postings[0].first = index_reader_.NextGEQ(list_data_pointers[lists_curr_postings[0].second], pivot.first)) == numeric_limits<uint32_t>::max()) {
+          if ((lists_curr_postings[0].first = list_data_pointers[lists_curr_postings[0].second]->NextGEQ(pivot.first)) == ListData::kNoMoreDocs) {
             // Just swap the current posting with the one at the end of the array.
             // We'll be sorting at the start of the loop, so we don't need to compact and keep the order of the postings.
             --num_lists_remaining;
@@ -1690,7 +1697,6 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
   }
   return total_num_results;
 }
-
 
 // TODO:
 // Difference between MaxScore and WAND is that once the threshold is sufficient enough, MaxScore will ignore the rest of the new docIDs in lists
@@ -1815,6 +1821,9 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
     int doc_len;
     uint32_t f_d_t;
 
+    // For use with score skipping.
+    float remaining_upperbound;
+
     // Compute the inverse document frequency component. It is not document dependent, so we can compute it just once for each list.
     float idf_t[num_query_terms];  // Using a variable length array here.
     int num_docs_t;
@@ -1826,13 +1835,13 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
     // We use this to get the next lowest docID from all the lists.
     uint32_t lists_curr_postings[num_query_terms];  // Using a variable length array here.
     for (int i = 0; i < num_query_terms; ++i) {
-      lists_curr_postings[i] = index_reader_.NextGEQ(list_data_pointers[i], 0);
+      lists_curr_postings[i] = list_data_pointers[i]->NextGEQ(0);
     }
 
     pair<float, int> list_upperbounds[num_query_terms];  // Using a variable length array here.
     int num_lists_remaining = 0;  // The number of lists with postings remaining.
     for (int i = 0; i < num_query_terms; ++i) {
-      if (lists_curr_postings[i] != numeric_limits<uint32_t>::max()) {
+      if (lists_curr_postings[i] != ListData::kNoMoreDocs) {
         list_upperbounds[num_lists_remaining++] = make_pair(list_thresholds[i], i);
       }
     }
@@ -1855,15 +1864,10 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
     // through better list skipping and less scoring computations.
     const bool kScoreSkipping = true;
 
-    /*
-     * For score skipping:
-     *
-     * Query: beneficiaries insurance irs life term
-     *
-     * TODO: total_num_results overflows...
-     *
-     * TODO: Make option to use chunks instead of blocks for score skipping!
-     */
+    // Defines the score skipping mode to use.
+    // '0' means use block score upperbounds.
+    // '1' means use chunk score upperbounds.
+#define SCORE_SKIPPING_MODE 1
 
     int i, j;
     int curr_list_idx;
@@ -1874,18 +1878,21 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
     while (num_lists_remaining) {
       top = &list_upperbounds[0];
       if (kScoreSkipping && threshold > list_upperbounds[1].first) {
-//        cout << "score skipping --- moving first list" << endl;
+#ifdef MAX_SCORE_DEBUG
+        cout << "Current threshold: " << threshold << endl;
+        cout << "Remaining upperbound: " << list_upperbounds[1].first << endl;
+#endif
 
         // Only the first (highest scoring) list can contain a docID that can still make it into the top-k,
         // so we move the first list to the first docID that has an upperbound that will allow it to make it into the top-k.
-        if ((lists_curr_postings[0] = index_reader_.NextGreaterScore(list_data_pointers[list_upperbounds[0].second], threshold - list_upperbounds[1].first)) == numeric_limits<uint32_t>::max()) {
-//          cout << "Early termination -- block score" << endl;
-
+#if SCORE_SKIPPING_MODE == 0
+        if ((lists_curr_postings[0] = list_data_pointers[top->second]->NextGreaterBlockScore(threshold - list_upperbounds[1].first)) == ListData::kNoMoreDocs) {
+#elif SCORE_SKIPPING_MODE == 1
+        if ((lists_curr_postings[0] = list_data_pointers[top->second]->NextGreaterChunkScore(threshold - list_upperbounds[1].first)) == ListData::kNoMoreDocs) {
+#endif
           // Can early terminate at this point.
           break;
         }
-
-//        cout << "Skipping to docID: " << lists_curr_postings[0] << endl;
       } else {
         // Find the lowest docID that can still possibly make it into the top-k (while being able to make it into the top-k).
         for (i = 1; i < num_lists_remaining; ++i) {
@@ -1922,89 +1929,65 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
         }
 
         // Move to the curr docID we're scoring.
-        lists_curr_postings[curr_list_idx] = index_reader_.NextGEQ(list_data_pointers[curr_list_idx], curr_doc_id);
-
-
-//        ///////////////////TODO: DEBUG
-//        if (curr_doc_id == 25170420) {
-//          cout << "Found it: " << curr_doc_id << endl;
-//        }
-//        ///////////////////////////////
-
-
-        // Use the tighter score bound we have on the current list to see if we can early terminate the scoring of this particular docID.
-        // TODO: To avoid the (i == num_lists_remaining - 1) test, can insert a dummy list with upperbound 0.
-        if (kScoreSkipping && /*lists_curr_postings[curr_list_idx] == curr_doc_id &&*/ threshold > bm25_sum + index_reader_.GetBlockScoreBound(list_data_pointers[curr_list_idx]) + ((i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first)) {
-//          cout << "bm25_sum: " << bm25_sum << endl;
-//          cout << "Curr block bound for docID: " << curr_doc_id << ", is: "<< index_reader_.GetBlockScoreBound(list_data_pointers[curr_list_idx]) << endl;
-//          cout << "List with # docs: " << list_data_pointers[curr_list_idx]->num_docs() << endl;
-//          cout << "threshold: " << threshold << endl;
-//          cout << "Remaining upperbounds: " << ((i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first) << endl;
-
-          // TODO: Need to move the current list pointer forward and check if we can remove it...
-
-          // Can now move the list pointer further.
-          lists_curr_postings[curr_list_idx] = index_reader_.NextGEQ(list_data_pointers[curr_list_idx], lists_curr_postings[curr_list_idx] + 1);
-          if (lists_curr_postings[curr_list_idx] == numeric_limits<uint32_t>::max()) {
-            /*if (kCompactArrayRightAway) {*/
-              --num_lists_remaining;
-              float curr_list_upperbound = list_thresholds[curr_list_idx];
-
-              // Compact the list upperbounds array.
-              for (j = i; j < num_lists_remaining; ++j) {
-                list_upperbounds[j] = list_upperbounds[j + 1];
-              }
-
-              // Recalculate the list upperbounds. Note that we only need to recalculate those entries less than i.
-              for (j = 0; j < i; ++j) {
-                list_upperbounds[j].first -= curr_list_upperbound;
-              }
-              --i;
-            /*} else {
-              compact_upperbounds = true;
-            }*/
-          }
-
-
-
-          // TODO: This is not necessary. It only terminates further scoring of the current document...
-          /*--num_lists_remaining;
-          float curr_list_upperbound = list_thresholds[curr_list_idx];
-
-          // Compact the list upperbounds array.
-          for (j = i; j < num_lists_remaining; ++j) {
-            list_upperbounds[j] = list_upperbounds[j + 1];
-          }
-
-          // Recalculate the list upperbounds. Note that we only need to recalculate those entries less than i.
-          for (j = 0; j < i; ++j) {
-            list_upperbounds[j].first -= curr_list_upperbound;
-          }*/
-
-
-
-          break;
-        }
+        lists_curr_postings[curr_list_idx] = list_data_pointers[curr_list_idx]->NextGEQ(curr_doc_id);
 
         if (lists_curr_postings[curr_list_idx] == curr_doc_id) {
+          // Use the tighter score bound we have on the current list to see if we can early terminate the scoring of this particular docID.
+          if (kScoreSkipping) {
+            // TODO: To avoid the (i == num_lists_remaining - 1) test, can insert a dummy list with upperbound 0.
+            remaining_upperbound = (i == num_lists_remaining - 1) ? 0 : list_upperbounds[i + 1].first;
+#if SCORE_SKIPPING_MODE == 0
+            if (threshold > bm25_sum + list_data_pointers[curr_list_idx]->GetBlockScoreBound() + remaining_upperbound) {
+#elif SCORE_SKIPPING_MODE == 1
+            if (threshold > bm25_sum + list_data_pointers[curr_list_idx]->GetChunkScoreBound() + remaining_upperbound) {
+#endif
+#ifdef MAX_SCORE_DEBUG
+              cout << "Short circuiting evaluation of docID: " << curr_doc_id << " from list with " << list_data_pointers[curr_list_idx]->num_docs()
+                  << " postings" << endl;
+              cout << "Current BM25 sum: " << bm25_sum << endl;
+              cout << "Current chunk bound for docID " << curr_doc_id << " is: " << list_data_pointers[curr_list_idx]->GetChunkScoreBound() << endl;
+              cout << "Current threshold: " << threshold << endl;
+              cout << "Remaining upperbound: " << remaining_upperbound << endl;
+#endif
+
+              // Can now move the list pointer further.
+              lists_curr_postings[curr_list_idx] = list_data_pointers[curr_list_idx]->NextGEQ(lists_curr_postings[curr_list_idx] + 1);
+              if (lists_curr_postings[curr_list_idx] == ListData::kNoMoreDocs) {
+                /*if (kCompactArrayRightAway) {*/
+                  --num_lists_remaining;
+                  float curr_list_upperbound = list_thresholds[curr_list_idx];
+
+                  // Compact the list upperbounds array.
+                  for (j = i; j < num_lists_remaining; ++j) {
+                    list_upperbounds[j] = list_upperbounds[j + 1];
+                  }
+
+                  // Recalculate the list upperbounds. Note that we only need to recalculate those entries less than i.
+                  for (j = 0; j < i; ++j) {
+                    list_upperbounds[j].first -= curr_list_upperbound;
+                  }
+                  --i;
+                /*} else {
+                  compact_upperbounds = true;
+                }*/
+              }
+
+              break;
+            }
+          }
+
           // Compute BM25 score from frequencies.
-          f_d_t = index_reader_.GetFreq(list_data_pointers[curr_list_idx], lists_curr_postings[curr_list_idx]);
+          f_d_t = list_data_pointers[curr_list_idx]->GetFreq();
           doc_len = index_reader_.GetDocLen(lists_curr_postings[curr_list_idx]);
           bm25_sum += idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
-
-//          //////////////////////TODO
-//          if((idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len)) > 2.68 && (idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len)) < 2.69) {
-//            cout << "BM25 SUM " << bm25_sum << " from List with # docs: " << list_data_pointers[curr_list_idx]->num_docs() << endl;
-//          }
-//          //////////////////
 
           ++num_postings_scored_;
 
           // Can now move the list pointer further.
-          lists_curr_postings[curr_list_idx] = index_reader_.NextGEQ(list_data_pointers[curr_list_idx], lists_curr_postings[curr_list_idx] + 1);
+          lists_curr_postings[curr_list_idx] = list_data_pointers[curr_list_idx]->NextGEQ(lists_curr_postings[curr_list_idx] + 1);
         }
 
-        if (lists_curr_postings[curr_list_idx] == numeric_limits<uint32_t>::max()) {
+        if (lists_curr_postings[curr_list_idx] == ListData::kNoMoreDocs) {
           /*if (kCompactArrayRightAway) {*/
             --num_lists_remaining;
             float curr_list_upperbound = list_thresholds[curr_list_idx];
@@ -2050,7 +2033,7 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
           num_lists_remaining = 0;
           for (i = 0; i < num_lists; ++i) {
             curr_list_idx = list_upperbounds[i].second;
-            if (lists_curr_postings[curr_list_idx] != numeric_limits<uint32_t>::max()) {
+            if (lists_curr_postings[curr_list_idx] != ListData::kNoMoreDocs) {
               list_upperbounds[num_lists_remaining++] = make_pair(list_thresholds[curr_list_idx], curr_list_idx);
             }
           }
@@ -2127,12 +2110,12 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
   // TODO: Can also try the heap based method here. Can select between heap and array method based on 'num_merge_lists'.
   uint32_t min_doc_id;
 
-  while (did < numeric_limits<uint32_t>::max()) {
+  while (did < ListData::kNoMoreDocs) {
     if (merge_lists != NULL) { // For the lists which we are merging.
       // This will select the lowest docID (ignoring duplicates among the merge lists and any docIDs we have skipped past through AND mode operation).
-      min_doc_id = numeric_limits<uint32_t>::max();
+      min_doc_id = ListData::kNoMoreDocs;
       for (i = 0; i < num_merge_lists; ++i) {
-        if ((d = index_reader_.NextGEQ(merge_lists[i], did)) < min_doc_id) {
+        if ((d = merge_lists[i]->NextGEQ(did)) < min_doc_id) {
           min_doc_id = d;
         }
       }
@@ -2143,17 +2126,17 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
       i = 0;
     } else {
       // Get next element from shortest list.
-      did = index_reader_.NextGEQ(lists[0], did);
+      did = lists[0]->NextGEQ(did);
       i = 1;
     }
 
-    if (did == numeric_limits<uint32_t>::max())
+    if (did == ListData::kNoMoreDocs)
       break;
 
     d = did;
 
     // Try to find entries with same docID in other lists.
-    for (; (i < num_lists) && ((d = index_reader_.NextGEQ(lists[i], did)) == did); ++i) {
+    for (; (i < num_lists) && ((d = lists[i]->NextGEQ(did)) == did); ++i) {
       continue;
     }
 
@@ -2166,7 +2149,7 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
       // Compute BM25 score from frequencies.
       bm25_sum = 0;
       for (i = 0; i < num_lists; ++i) {
-        f_d_t = index_reader_.GetFreq(lists[i], did);
+        f_d_t = lists[i]->GetFreq();
         doc_len = index_reader_.GetDocLen(did);
         bm25_sum += idf_t[i] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
       }
@@ -2282,15 +2265,15 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
     idf_t[i] = log10(1 + (collection_total_num_docs_ - num_docs_t + 0.5) / (num_docs_t + 0.5));
   }
 
-  while (did < numeric_limits<uint32_t>::max()) {
+  while (did < ListData::kNoMoreDocs) {
     // Get next element from shortest list.
-    if ((did = index_reader_.NextGEQ(lists[0], did)) == numeric_limits<uint32_t>::max())
+    if ((did = lists[0]->NextGEQ(did)) == ListData::kNoMoreDocs)
       break;
 
     d = did;
 
     // Try to find entries with same docID in other lists.
-    for (i = 1; (i < kNumLists) && ((d = index_reader_.NextGEQ(lists[i], did)) == did); ++i) {
+    for (i = 1; (i < kNumLists) && ((d = lists[i]->NextGEQ(did)) == did); ++i) {
       continue;
     }
 
@@ -2304,8 +2287,8 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
       bm25_sum = 0;
       doc_len_d = index_reader_.GetDocLen(did);
       for (i = 0; i < kNumLists; ++i) {
-        f_d_t[i] = index_reader_.GetFreq(lists[i], did);
-        positions_d_t[i] = lists[i]->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+        f_d_t[i] = lists[i]->GetFreq();
+        positions_d_t[i] = lists[i]->curr_chunk_decoder().current_positions();
         bm25_sum += idf_t[i] * (f_d_t[i] * kBm25NumeratorMul) / (f_d_t[i] + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len_d);
       }
 
@@ -2591,7 +2574,7 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
 
   if (result_format_ == kNormal)
     if (!silent_mode_)
-      cout << "\nShowing " << results_size << " results out of " << total_num_results << ". (" << query_elapsed_time << " seconds)\n";
+      cout << "\nShowing " << results_size << " results out of " << total_num_results << ". (" << setprecision(1) << (query_elapsed_time * 1000) << " ms)\n";
 }
 
 // We only count queries for which all terms are in the lexicon as part of the number of queries executed and the total elapsed querying time.
@@ -2618,6 +2601,9 @@ void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries)
   silent_mode_ = true;
   warm_up_mode_ = true;
   for (int i = 0; i < num_warm_up_queries; ++i) {
+#ifdef IRTK_DEBUG
+    cout << queries[i] << endl;
+#endif
     ExecuteQuery(queries[i], 0);
   }
 
@@ -2626,6 +2612,9 @@ void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries)
   silent_mode_ = ((percentage_test_queries != 1.0) ? false : true);
   warm_up_mode_ = false;
   for (int i = num_warm_up_queries; i < static_cast<int> (queries.size()); ++i) {
+#ifdef IRTK_DEBUG
+    cout << queries[i] << endl;
+#endif
     ExecuteQuery(queries[i], 0);
   }
 }
