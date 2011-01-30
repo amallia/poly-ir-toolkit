@@ -46,7 +46,7 @@ using namespace std;
 IndexCat::IndexCat(const IndexFiles& index_files) :
   index_(NULL), includes_contexts_(true), includes_positions_(true) {
   CacheManager* cache_policy = new MergingCachePolicy(index_files.index_filename().c_str());
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, index_files.lexicon_filename().c_str(),
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, index_files.lexicon_filename().c_str(),
                                               index_files.document_map_filename().c_str(), index_files.meta_info_filename().c_str(), true);
 
   if (!index_reader->includes_contexts())
@@ -71,11 +71,11 @@ void IndexCat::Cat(const char* term, int term_len) {
       printf(":\n");
 
       while (index_->NextDocId()) {
-        uint32_t curr_frequency = index_->index_reader()->GetFreq(index_->curr_list_data(), index_->curr_doc_id());
+        uint32_t curr_frequency = index_->curr_list_data()->GetFreq();
         printf("(%u, %u, <", index_->curr_doc_id(), curr_frequency);
 
         if (includes_positions_) {
-          const uint32_t* curr_positions = index_->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+          const uint32_t* curr_positions = index_->curr_list_data()->curr_chunk_decoder().current_positions();
           for (size_t i = 0; i < curr_frequency; ++i) {
             printf("%u", curr_positions[i]);
             if (i != (curr_frequency - 1))

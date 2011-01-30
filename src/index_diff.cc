@@ -47,11 +47,11 @@ using namespace std;
 IndexDiff::IndexDiff(const IndexFiles& index_files1, const IndexFiles& index_files2) :
   index1_(NULL), index2_(NULL), includes_contexts_(true), includes_positions_(true) {
   CacheManager* cache_policy1 = new MergingCachePolicy(index_files1.index_filename().c_str());
-  IndexReader* index_reader1 = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy1, index_files1.lexicon_filename().c_str(),
+  IndexReader* index_reader1 = new IndexReader(IndexReader::kMerge, *cache_policy1, index_files1.lexicon_filename().c_str(),
                                                index_files1.document_map_filename().c_str(), index_files1.meta_info_filename().c_str(), true);
 
   CacheManager* cache_policy2 = new MergingCachePolicy(index_files2.index_filename().c_str());
-  IndexReader* index_reader2 = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy2, index_files2.lexicon_filename().c_str(),
+  IndexReader* index_reader2 = new IndexReader(IndexReader::kMerge, *cache_policy2, index_files2.lexicon_filename().c_str(),
                                                index_files2.document_map_filename().c_str(), index_files2.meta_info_filename().c_str(), true);
 
   // If one of the indices does not contain contexts or positions then we ignore them in both indices.
@@ -93,8 +93,8 @@ void IndexDiff::Diff(const char* term, int term_len) {
       assert(index1_->curr_term_len() == index2_->curr_term_len() && strncmp(index1_->curr_term(), index2_->curr_term(), index1_->curr_term_len()) == 0);
       if ((term == NULL && term_len == 0) || (index1_->curr_term_len() == term_len && strncmp(index1_->curr_term(), term, term_len) == 0)) {
         // Check the frequencies and positions for any differences.
-        uint32_t curr_frequency1 = index1_->index_reader()->GetFreq(index1_->curr_list_data(), index1_->curr_doc_id());
-        uint32_t curr_frequency2 = index2_->index_reader()->GetFreq(index2_->curr_list_data(), index2_->curr_doc_id());
+        uint32_t curr_frequency1 = index1_->curr_list_data()->GetFreq();
+        uint32_t curr_frequency2 = index2_->curr_list_data()->GetFreq();
 
         if (curr_frequency1 != curr_frequency2) {
           printf("Frequencies differ: index1: %u, index2: %u (Postings from index1 and index2 shown below)\n", curr_frequency1, curr_frequency2);
@@ -104,8 +104,8 @@ void IndexDiff::Diff(const char* term, int term_len) {
         }
 
         if (includes_positions_) {
-          const uint32_t* curr_positions1 = index1_->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
-          const uint32_t* curr_positions2 = index2_->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+          const uint32_t* curr_positions1 = index1_->curr_list_data()->curr_chunk_decoder().current_positions();
+          const uint32_t* curr_positions2 = index2_->curr_list_data()->curr_chunk_decoder().current_positions();
 
           // This is similar to doing a merge on the positions, since they are in sorted order.
           size_t i1 = 0;
@@ -210,11 +210,11 @@ void IndexDiff::Print(Index* index, const char* term, int term_len) {
     }
     printf("', ");
 
-    uint32_t curr_frequency = index->index_reader()->GetFreq(index->curr_list_data(), index->curr_doc_id());
+    uint32_t curr_frequency = index->curr_list_data()->GetFreq();
     printf("%u, %u, <", index->curr_doc_id(), curr_frequency);
 
     if (includes_positions_) {
-      const uint32_t* curr_positions = index->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+      const uint32_t* curr_positions = index->curr_list_data()->curr_chunk_decoder().current_positions();
       for (size_t i = 0; i < curr_frequency; ++i) {
         printf("%u", curr_positions[i]);
         if (i != (curr_frequency - 1))
