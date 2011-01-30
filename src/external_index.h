@@ -195,6 +195,7 @@ public:
     // These are for synchronization with our main index traversal.
     uint32_t block_num_start;  // The starting block number (from the main index) of the list.
     uint32_t block_num_curr;   // The number (from the main index) of the next block that needs to be decoded.
+    int block_curr_chunk_num;  // The number (from the current block) of the next chunk that needs to be decoded.
 
     // The data for the current block.
     int block_num_chunks;
@@ -206,11 +207,11 @@ public:
   ~ExternalIndexReader();
 
   void AdvanceToBlock(uint32_t block_num, ExternalIndexPointer* external_index_pointer) const;
-
-  void AdvanceChunk(ExternalIndexPointer* external_index_pointer) const;
+  void AdvanceToChunk(int chunk_num, ExternalIndexPointer* external_index_pointer) const;
 
 private:
   void DecodeBlock(ExternalIndexPointer* external_index_pointer) const;
+  void DecodeChunk(ExternalIndexPointer* external_index_pointer) const;
 
   int external_index_fd_;      // File descriptor of the external index.
   off_t external_index_size_;  // Size of the external index in bytes.
