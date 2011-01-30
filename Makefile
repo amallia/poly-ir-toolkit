@@ -76,4 +76,4 @@ clean:
 	rm -f $(OBJS) $(TARGET)
 
 clear:
-	rm -f document_collections_doc_id_ranges index*.idx* index*.lex* index*.meta* index*.dmap*
+	rm -f document_collections_doc_id_ranges index*.idx* index*.lex* index*.meta* index*.dmap* index*.ext*
