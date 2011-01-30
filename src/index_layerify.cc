@@ -88,7 +88,7 @@ LayeredIndexGenerator::LayeredIndexGenerator(const IndexFiles& input_index_files
                                     external_index_builder_);
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, input_index_files.lexicon_filename().c_str(),
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, input_index_files.lexicon_filename().c_str(),
                                               input_index_files.document_map_filename().c_str(), input_index_files.meta_info_filename().c_str(), false);
 
   // Coding policy for the remapped index remains the same as that of the original index.
@@ -131,8 +131,8 @@ LayeredIndexGenerator::~LayeredIndexGenerator() {
 }
 
 // TODO: For now, we assume the whole inverted list fits in main memory and we don't index positions.
-// TODO: Computing BM25 scores during the various sorting stages is expensive. When sorting, we have to do n*log(n) comparisons and thus recompute the BM25 score more than necessary.
-//       We can speedup by precomputing and storing the BM25 scores.
+// TODO: Computing BM25 scores during the various sorting stages is expensive. When sorting, we have to do n*log(n) comparisons and thus recompute the
+//       BM25 score more than necessary. We can speedup by precomputing and storing the BM25 scores.
 void LayeredIndexGenerator::CreateLayeredIndex() {
   GetDefaultLogger().Log("Creating layered index.", false);
 
@@ -140,9 +140,8 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   const int kLayerMinSize = CHUNK_SIZE;
   const int kMaxLayers = MAX_LIST_LAYERS;
 
-  // TODO: We define the number of layers and several layering strategies.
   // TODO: Need a strategy that uses the IDF to split list into layers, so that only the top scoring documents are in the upper layers.
-  // The parameters for the strategies should be included in config file, and which strategy to use by default, and the number of layers to generate.
+  // The parameters for the strategies should be included in config file, and which strategy to use by default.
 
   // We implement three different layer splitting strategies:
   // * Split layers by percentage.
@@ -180,14 +179,16 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   }
 
   while (index_->NextTerm()) {
-    /////////////////////////////////////TODO skip layering lists to the ones we want for debugging.
-    /*string curr_term = string(index_->curr_term(), index_->curr_term_len());
-    if (!(curr_term == "beneficiaries" || curr_term == "insurance" || curr_term == "irs" || curr_term == "life" || curr_term == "hello" || curr_term == "world"))
+#ifdef INDEX_LAYERIFY_DEBUG
+    // Skip layering only to these lists for faster debugging.
+    string curr_term = string(index_->curr_term(), index_->curr_term_len());
+    if (!(curr_term == "beneficiaries" || curr_term == "insurance" || curr_term == "irs" || curr_term == "life" || curr_term == "hello" || curr_term == "world"
+        || curr_term == "superior" || curr_term == "court" || curr_term == "king" || curr_term == "county" || curr_term == "divorce"))
       continue;
-    cout << "CURR TERM: " << curr_term << endl;*/
-    //////////////////////////////////////
+    cout << "Layering for inverted list: " << curr_term << endl;
+#endif
 
-    // TODO: Probably want to reuse buffers, unless we need to resize...
+    // TODO: It's better to reuse the buffer, and resize only when necessary.
     int num_docs_in_list = index_->curr_list_data()->num_docs();
     IndexEntry* index_entry_buffer = new IndexEntry[num_docs_in_list];
     int index_entry_offset = 0;
@@ -198,7 +199,7 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
       assert(index_entry_offset < num_docs_in_list);
 
       curr_index_entry.doc_id = index_->curr_doc_id();
-      curr_index_entry.frequency = index_->index_reader()->GetFreq(index_->curr_list_data(), index_->curr_doc_id());
+      curr_index_entry.frequency = index_->curr_list_data()->GetFreq();
 
       ++index_entry_offset;
     }  // No more postings in the list.
@@ -210,19 +211,25 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
     // First, we sort by docID score.
     DocIdScoreComparison doc_id_score_comparator(index_->index_reader()->document_map(), num_docs_in_list, average_doc_length, total_num_docs);
+#ifdef INDEX_LAYERIFY_DEBUG
+    // For a particular term, print all the docIDs in the list and their partial BM25 scores, and group them in chunks.
+    // This is before we sort the docIDs by score.
+    if (curr_term == "superior" || curr_term == "divorce") {
+      cout << "Printing docIDs and scores for list: " << curr_term << endl;
+      cout << "total postings: " << index_entry_offset << endl;
+      for (int i = 0; i < index_entry_offset; ++i) {
+        if ((i & 127) == 0) {
+          assert((i % 128) == 0);
+          cout << "*New Chunk*" << endl;
+        }
+        cout << "docID: " << index_entry_buffer[i].doc_id << ", score: " << doc_id_score_comparator.Bm25Score(index_entry_buffer[i]) << endl;
+      }
+    }
+#endif
     sort(index_entry_buffer, index_entry_buffer + index_entry_offset, doc_id_score_comparator);
 
     // For the exponentially increasing bucket size implementation.
     float base = pow(index_entry_offset, 1.0 / num_layers_);
-
-    //////////////////////////////////////TODO: debug
-    /*if (curr_term == "beswick") {
-      cout << "total_num_postings: " << index_entry_offset << endl;
-      for (int i = 0; i < index_entry_offset; ++i) {
-        cout << "docID: " << index_entry_buffer[i].doc_id << ", score: " << doc_id_score_comparator.Bm25Score(index_entry_buffer[i]) << endl;
-      }
-    }*/
-    //////////////////////////////////////
 
     float list_score_threshold = 0;  // The upperbound score for the whole list.
     int total_num_postings = index_entry_offset;
@@ -252,7 +259,8 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
           break;
       }
 
-      // Potentially, due to the layering parameters, we will get more postings in the current layer than the total remaining postings, and we have to normalize for that.
+      // Potentially, due to the layering parameters, we will get more postings in the current layer than the total remaining postings,
+      // and we have to normalize for that.
       num_postings_curr_layer = min(num_postings_curr_layer, num_postings_left);
 
       // Make each layer the minimum size (if there are enough postings remaining).
@@ -270,10 +278,12 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
         num_postings_left = 0;
       }
 
-      // We want to split so that scores in each layer are unique (i.e. the lowest scoring posting in one layer does not have the same score as the highest scoring posting in the next layer).
+      // We want to split so that scores in each layer are unique (i.e. the lowest scoring posting in one layer does not have the same score
+      // as the highest scoring posting in the next layer).
       // This causes problems in early termination algorithms if not taken into account (the top-k documents returned will not be identical).
       // The solution to this problem is the following:
-      // If the last posting of the current layer has the same score as the next n postings (which are in the next layer(s)), we move those same scoring postings into the current layer.
+      // If the last posting of the current layer has the same score as the next n postings (which are in the next layer(s)),
+      // we move those same scoring postings into the current layer.
       // If the next layer(s) now contain 0 documents, we push postings from layers further down into the upper layers.
       float curr_layer_threshold, next_layer_threshold;
       do {
@@ -311,12 +321,9 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
         score_threshold = list_score_threshold;
       }
       sort(index_entry_buffer + layer_start, index_entry_buffer + curr_layer_start + num_postings_curr_layer, IndexEntryDocIdComparison());
-      DumpToIndex(doc_id_score_comparator, index_entry_buffer + layer_start, curr_layer_start + num_postings_curr_layer - layer_start, index_->curr_term(), index_->curr_term_len());
+      DumpToIndex(doc_id_score_comparator, index_entry_buffer + layer_start, curr_layer_start + num_postings_curr_layer - layer_start, index_->curr_term(),
+                  index_->curr_term_len());
       index_builder_->FinalizeLayer(score_threshold);  // Need to call this before writing out the next layer.
-
-      ////////////////TODO
-//      cout << "set score threshold for list: " << score_threshold << ", layer # " << i << endl;
-      //////////////////
     }
 
     delete[] index_entry_buffer;
@@ -381,11 +388,6 @@ void LayeredIndexGenerator::DumpToIndex(const DocIdScoreComparison& doc_id_score
                                        doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
                                        position_compressor_);
     chunk.set_max_score(GetChunkMaxScore(doc_id_score_comparator, index_entries + (index_entries_offset - doc_ids_offset), doc_ids_offset));
-
-    ////////////////////TODO
-//    cout << "max score: " << chunk.max_score() << endl;
-    /////////////////////
-
     prev_chunk_last_doc_id = chunk.last_doc_id();
     index_builder_->Add(chunk, curr_term, curr_term_len);
   }
@@ -425,7 +427,8 @@ void LayeredIndexGenerator::WriteMetaFile(const std::string& meta_filename) {
   index_metafile.AddKeyValuePair(meta_properties::kFirstDocId, Stringify(first_doc_id_in_index_));
   index_metafile.AddKeyValuePair(meta_properties::kLastDocId, Stringify(last_doc_id_in_index_));
   index_metafile.AddKeyValuePair(meta_properties::kDocumentPostingCount, Stringify(document_posting_count_));
-  if ((!overlapping_layers_ && index_posting_count_ != index_builder_->posting_count()) || (overlapping_layers_ && index_posting_count_ > index_builder_->posting_count())) {
+  if ((!overlapping_layers_ && index_posting_count_ != index_builder_->posting_count()) ||
+      (overlapping_layers_ && index_posting_count_ > index_builder_->posting_count())) {
     GetErrorLogger().Log("Inconsistency in the '" + string(meta_properties::kIndexPostingCount) + "' meta file property detected: "
         + "value from original index meta file doesn't add up to the value calculated by the index builder.", false);
   }

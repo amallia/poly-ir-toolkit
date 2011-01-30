@@ -32,7 +32,7 @@
 #define INDEX_LAYERIFY_H_
 
 // Enables debugging output for this module.
-#define INDEX_LAYERIFY_DEBUG
+//#define INDEX_LAYERIFY_DEBUG
 
 #include <cassert>
 #include <cmath>
