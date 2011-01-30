@@ -75,7 +75,7 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
     const IndexFiles& curr_index_files = input_index_files[i];
 
     CacheManager* cache_policy = new MergingCachePolicy(curr_index_files.index_filename().c_str());
-    IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, curr_index_files.lexicon_filename().c_str(),
+    IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, curr_index_files.lexicon_filename().c_str(),
                                                 curr_index_files.document_map_filename().c_str(), curr_index_files.meta_info_filename().c_str(), true);
 
     // If one index from the ones to be merged does not contain contexts or positions
@@ -207,10 +207,10 @@ void IndexMerger::MergeOneHeap() {
 
     // A continuation of the same list.
     if (top_list->curr_term_len() == curr_term_len && strncmp(top_list->curr_term(), curr_term, min(top_list->curr_term_len(), curr_term_len)) == 0) {
-      uint32_t curr_frequency = top_list->index_reader()->GetFreq(top_list->curr_list_data(), top_list->curr_doc_id());
+      uint32_t curr_frequency = top_list->curr_list_data()->GetFreq();
 
       if (includes_positions_) {
-        const uint32_t* curr_positions = top_list->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+        const uint32_t* curr_positions = top_list->curr_list_data()->curr_chunk_decoder().current_positions();
         // Copy the positions.
         for (size_t i = 0; i < curr_frequency; ++i) {
           positions[properties_offset + i] = curr_positions[i];
@@ -384,9 +384,9 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
   while (posting_heap_size) {
     Index* top_list = posting_heap[0];
 
-    uint32_t curr_frequency = top_list->index_reader()->GetFreq(top_list->curr_list_data(), top_list->curr_doc_id());
+    uint32_t curr_frequency = top_list->curr_list_data()->GetFreq();
     if (includes_positions_) {
-      const uint32_t* curr_positions = top_list->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+      const uint32_t* curr_positions = top_list->curr_list_data()->curr_chunk_decoder().current_positions();
       // Copy the positions.
       for (size_t i = 0; i < curr_frequency; ++i) {
         positions[properties_offset + i] = curr_positions[i];

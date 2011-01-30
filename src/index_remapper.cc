@@ -75,7 +75,7 @@ IndexRemapper::IndexRemapper(const IndexFiles& input_index_files, const string& 
   index_builder_ = new IndexBuilder(output_index_files_.lexicon_filename().c_str(), output_index_files_.index_filename().c_str(), block_header_compressor_);
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, input_index_files.lexicon_filename().c_str(),
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, input_index_files.lexicon_filename().c_str(),
                                               input_index_files.document_map_filename().c_str(), input_index_files.meta_info_filename().c_str(), true);
 
   // Coding policy for the remapped index remains the same as that of the original index.
@@ -237,10 +237,10 @@ bool IndexRemapper::CopyToIndexEntry(IndexEntry* index_entry, PositionsPool* pos
   if (curr_index_entry.doc_id < first_doc_id_in_index_)
     first_doc_id_in_index_ = curr_index_entry.doc_id;
 
-  curr_index_entry.frequency = index_->index_reader()->GetFreq(index_->curr_list_data(), index_->curr_doc_id());
+  curr_index_entry.frequency = index_->curr_list_data()->GetFreq();
 
   if (includes_positions_) {
-    const uint32_t* curr_positions = index_->curr_list_data()->curr_block_decoder()->curr_chunk_decoder()->current_positions();
+    const uint32_t* curr_positions = index_->curr_list_data()->curr_chunk_decoder().current_positions();
     if ((curr_index_entry.positions = positions_pool->StorePositions(curr_positions, curr_index_entry.frequency)) == NULL) {
       // Positions buffer out of space.
       return false;
