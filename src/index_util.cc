@@ -144,7 +144,7 @@ bool Index::NextTerm() {
 }
 
 bool Index::NextDocId() {
-  if (curr_list_data_ != NULL && (curr_doc_id_ = index_reader_->NextGEQ(curr_list_data_, next_doc_id_)) < numeric_limits<uint32_t>::max()) {
+  if (curr_list_data_ != NULL && (curr_doc_id_ = curr_list_data_->NextGEQ(next_doc_id_)) < ListData::kNoMoreDocs) {
     next_doc_id_ = curr_doc_id_ + 1;
     return true;
   }

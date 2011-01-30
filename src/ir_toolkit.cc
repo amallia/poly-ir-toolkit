@@ -414,8 +414,7 @@ void Diff(const char* index1_filename, const char* lexicon1_filename, const char
 void RetrieveIndexData(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
                        const char* term, int term_len) {
   CacheManager* cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, lexicon_filename, doc_map_filename,
-                                              meta_info_filename, true);
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, lexicon_filename, doc_map_filename, meta_info_filename, true);
 
   // Need to read through the lexicon until we reach the term we want.
   LexiconData* lex_data;
@@ -430,9 +429,6 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
     return;
   }
 
-  // What type of data we want to retrieve from the inverted list.
-  IndexReader::IndexDataType data_type = IndexReader::kDocId;  // Retrieve the docIDs.
-
   const int kInitialIndexDataSize = 4096;
   uint32_t index_data_chunk[kInitialIndexDataSize];
 
@@ -441,6 +437,9 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
 
   ListData* list_data = index_reader->OpenList(*lex_data, 0);
 
+  // What type of data we want to retrieve from the inverted list.
+  ListData::RetrieveDataType data_type = ListData::kDocId;  // Retrieve the docIDs.
+
   int num_elements_stored;
   int element_offset = 0;
   int total_num_elements_stored = 0;
@@ -448,7 +447,7 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
   Timer timer;
 
   // We keep looping, retrieving index data in chunks, and storing into one large array (which is resized as necessary).
-  while ((num_elements_stored = index_reader->GetList(list_data, data_type, index_data_chunk, kInitialIndexDataSize)) != 0) {
+  while ((num_elements_stored = list_data->GetList(data_type, index_data_chunk, kInitialIndexDataSize)) != 0) {
     assert(num_elements_stored != -1);
 
     total_num_elements_stored += num_elements_stored;
@@ -502,8 +501,7 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
     cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
   }
 
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, IndexReader::kSortedGapCoded, *cache_policy, lexicon_filename, doc_map_filename,
-                                              meta_info_filename, true);
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, lexicon_filename, doc_map_filename, meta_info_filename, true);
 
   // Need to read through the lexicon until we reach the term we want.
   LexiconData* lex_data;
@@ -518,16 +516,16 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
     return;
   }
 
-  // What type of data we want to retrieve from the inverted list.
-  IndexReader::IndexDataType data_type;
-  //data_type = IndexReader::kDocId;      // Decodes only the docIDs.
-  //data_type = IndexReader::kFrequency;  // Decodes the docIDs and the frequencies. TODO: docIDs should not be decoded by default.
-  data_type = IndexReader::kPosition;   // Decodes docIDs, frequencies, and positions (for positions, frequency must be decoded as well).
-
   ListData* list_data = index_reader->OpenList(*lex_data, 0);
 
+  // What type of data we want to retrieve from the inverted list.
+  ListData::RetrieveDataType data_type;
+//  data_type = ListData::kDocId;      // Decodes only the docIDs.
+  data_type = ListData::kFrequency;  // Decodes the docIDs and the frequencies.
+//  data_type = ListData::kPosition;   // Decodes docIDs, frequencies, and positions (for positions, frequency must be decoded as well).
+
   Timer timer;
-  int num_elements_retrieved = index_reader->LoopOverList(list_data, data_type);
+  int num_elements_retrieved = list_data->LoopOverList(data_type);
   double time_elapsed = timer.GetElapsedTime();
 
   cout << "Index data elements retrieved: " << num_elements_retrieved << "; took " << time_elapsed << " seconds."<< endl;
