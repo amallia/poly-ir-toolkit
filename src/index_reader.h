@@ -33,10 +33,12 @@
 #define INDEX_READER_H_
 
 // Enables debugging output for this module.
-#define INDEX_READER_DEBUG
+//#define INDEX_READER_DEBUG
 
 #include <cassert>
 #include <stdint.h>
+
+#include <climits>
 
 #ifdef INDEX_READER_DEBUG
 #include <iostream>
@@ -54,22 +56,19 @@
 /**************************************************************************************************************************************************************
  * ChunkDecoder
  *
- * Responsible for decoding the data contained within a chunk and maintains some state during list traversal.
+ * Responsible for decoding the data contained within a chunk and maintaining some state during list traversal.
  **************************************************************************************************************************************************************/
 class ChunkDecoder {
 public:
-  struct ChunkProperties {
-    bool includes_contexts;
-    bool includes_positions;
-  };
+  ChunkDecoder();
 
-  ChunkDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor);
+  void InitChunk(int num_docs, const uint32_t* buffer);
 
-  void InitChunk(const ChunkProperties& properties, const uint32_t* buffer, int num_docs);
-  void DecodeDocIds();
-  void DecodeProperties();
-  int DecodeFrequencies(const uint32_t* compressed_frequencies);
-  int DecodePositions(const uint32_t* compressed_positions);
+  void DecodeDocIds(const CodingPolicy& doc_id_decompressor);
+
+  void DecodeFrequencies(const CodingPolicy& frequency_decompressor);
+
+  void DecodePositions(const CodingPolicy& position_decompressor);
 
   // Update the offset of the properties for the current document.
   // Requires 'frequencies_' to have been already decoded.
@@ -96,26 +95,17 @@ public:
     return positions_ + curr_position_offset_;
   }
 
-  // Set the offset into the 'doc_ids_' and 'frequencies_' arrays.
-  // This allows us to quickly get to the frequency information for the current
-  // document being processed as well as speed up finding the next document to process in this chunk.
-  void set_curr_document_offset(int doc_offset) {
-    assert(doc_offset >= 0 && doc_offset >= curr_document_offset_);
-    curr_document_offset_ = doc_offset;
-  }
-
-  // Returns the number of documents in this chunk.
   int num_docs() const {
     return num_docs_;
   }
 
-  // Returns true when the document properties have been decoded.
-  bool decoded_properties() const {
-    return decoded_properties_;
-  }
-
   int curr_document_offset() const {
     return curr_document_offset_;
+  }
+
+  void set_curr_document_offset(int doc_offset) {
+    assert(doc_offset >= 0 && doc_offset >= curr_document_offset_);
+    curr_document_offset_ = doc_offset;
   }
 
   int curr_position_offset() const {
@@ -134,12 +124,20 @@ public:
     prev_decoded_doc_id_ += doc_id_offset;
   }
 
-  bool decoded() const {
-    return decoded_;
+  bool decoded_doc_ids() const {
+    return decoded_doc_ids_;
   }
 
-  void set_decoded(bool decoded) {
-    decoded_ = decoded;
+  void set_decoded_doc_ids(bool decoded_doc_ids) {
+    decoded_doc_ids_ = decoded_doc_ids;
+  }
+
+  bool decoded_properties() const {
+    return decoded_properties_;
+  }
+
+  void set_decoded_properties(bool decoded_properties) {
+    decoded_properties_ = decoded_properties;
   }
 
   float chunk_max_score() const {
@@ -150,60 +148,44 @@ public:
     chunk_max_score_ = chunk_max_score;
   }
 
-  // The maximum number of documents that can be contained within a chunk.
-  static const int kChunkSize = CHUNK_SIZE;
-  // The maximum number of properties per document.
-  static const int kMaxProperties = MAX_FREQUENCY_PROPERTIES;
+  static const int kChunkSize = CHUNK_SIZE;                    // The maximum number of documents that can be contained within a chunk.
+  static const int kMaxProperties = MAX_FREQUENCY_PROPERTIES;  // The maximum number of properties per document.
 
 private:
-  ChunkProperties properties_;  // Controls aspects of how this chunk performs decoding.
-
-  int num_docs_;  // The number of documents in this chunk.
-
-  // These buffers are used for decompression of chunks.
-  uint32_t doc_ids_[UncompressedOutBufferUpperbound(kChunkSize)];                     // Array of decompressed docIDs. If stored gap coded, the gaps are not decoded here,
-                                                                                      // but rather during query processing.
-  uint32_t frequencies_[UncompressedOutBufferUpperbound(kChunkSize)];                 // Array of decompressed frequencies.
-  uint32_t positions_[UncompressedOutBufferUpperbound(kChunkSize * kMaxProperties)];  // Array of decomrpessed positions. The position gaps are not decoded here,
-                                                                                      // but rather during query processing, if necessary at all.
-
-  int curr_document_offset_;      // The offset into the 'doc_ids_' array of the current document we're processing.
-  int prev_document_offset_;      // The position we last stopped at when updating the 'curr_position_offset_'.
-  int curr_position_offset_;      // The offset into the 'positions_' array for the current document being processed.
-  uint32_t prev_decoded_doc_id_;  // The previously decoded doc id. This is used during query processing when decoding docID gaps.
-
-  int num_positions_;             // Total number of decoded positions in this list.
-  bool decoded_properties_;       // True when we have decoded the document properties (that is, frequencies, positions, etc).
-                                  // Necessary because we don't want to decode the frequencies/contexts/positions until we're certain we actually need them.
-
+  int curr_document_offset_;              // The offset into the 'doc_ids_' and 'frequencies_' arrays of the current document we're processing.
+                                          // This allows us to quickly get to the frequency information for the current document being processed
+                                          // as well as speed up finding the next document to process in this chunk.
+  uint32_t prev_decoded_doc_id_;          // The previously decoded doc id. This is used during query processing when decoding docID gaps.
+  bool decoded_doc_ids_;                  // True when we have decoded the docIDs.
+  bool decoded_properties_;               // True when we have decoded the document properties (that is, frequencies, positions, etc). Necessary because we
+                                          // don't want to decode the frequencies/contexts/positions until we're certain we actually need them.
+  float chunk_max_score_;                 // The maximum partial docID score contained within this chunk.
+  int num_positions_;                     // Total number of decoded positions in this list.
+  int prev_document_offset_;              // The position we last stopped at when updating the 'curr_position_offset_'.
+  int curr_position_offset_;              // The offset into the 'positions_' array for the current document being processed.
+  int num_docs_;                          // The number of documents in this chunk.
   const uint32_t* curr_buffer_position_;  // Pointer to the raw data of stuff we have to decode next.
 
-  bool decoded_;  // True when we have decoded the docIDs.
-
-  float chunk_max_score_;  // The maximum partial docID score contained within this chunk.
-
-  // Decompressors for various portions of the chunk.
-  const CodingPolicy& doc_id_decompressor_;
-  const CodingPolicy& frequency_decompressor_;
-  const CodingPolicy& position_decompressor_;
+  // These buffers are used for decompression of chunks.
+  uint32_t doc_ids_[UncompressedOutBufferUpperbound(kChunkSize)];                     // Array of decompressed docIDs. If stored gap coded,
+                                                                                      // the gaps are not decoded here, but rather during query processing.
+  uint32_t frequencies_[UncompressedOutBufferUpperbound(kChunkSize)];                 // Array of decompressed frequencies.
+  uint32_t positions_[UncompressedOutBufferUpperbound(kChunkSize * kMaxProperties)];  // Array of decomrpessed positions. The position gaps are not decoded
+                                                                                      // here, but rather during query processing, if necessary at all.
 };
 
 /**************************************************************************************************************************************************************
  * BlockDecoder
  *
- * Responsible for decoding a block from a particular inverted list.
+ * Responsible for decoding the block header from a particular block in the inverted list and maintaining some state during list traversal.
  **************************************************************************************************************************************************************/
 class BlockDecoder {
 public:
-  BlockDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor,
-               const CodingPolicy& block_header_decompressor);
+  BlockDecoder();
 
-  void InitBlock(uint64_t block_num, int starting_chunk, uint32_t* block_data);
+  void InitBlock(const CodingPolicy& block_header_decompressor, int starting_chunk, uint32_t* block_data);
 
-  // Decompresses the block header starting at the 'compressed_header' location in memory.
-  // The last docIDs and sizes of chunks will be stored internally in this class after decoding,
-  // and the memory freed during destruction.
-  int DecodeHeader(uint32_t* compressed_header);
+  void DecodeHeader(const CodingPolicy& block_header_decompressor);
 
   // Returns the last fully decoded docID of the ('chunk_idx'+1)th chunk in the block.
   uint32_t chunk_last_doc_id(int chunk_idx) const {
@@ -219,26 +201,9 @@ public:
     return chunk_properties_[idx];
   }
 
-  // Returns a pointer to the current chunk decoder, that is, the one currently being traversed.
-  ChunkDecoder* curr_chunk_decoder() {
-    return &curr_chunk_decoder_;
-  }
-
-  // Returns true if the current chunk has been decoded (the docIDs were decoded).
-  bool curr_chunk_decoded() const {
-    return curr_chunk_decoder_.decoded();
-  }
-
-  // Returns the size of the block header in bytes.
-  // This also includes the number of chunks as part of the header.
-  int block_header_size() const {
-    return block_header_size_;
-  }
-
-  // Returns the total number of chunks in this block.
-  // This includes any chunks that are not part of the inverted list for this particular term.
-  int num_chunks() const {
-    return num_chunks_;
+  // Returns the actual number of chunks stored in this block, that are actually part of the inverted list for this particular term.
+  int num_actual_chunks() const {
+    return num_chunks_ - starting_chunk_;
   }
 
   // Returns the maximum docID score contained within this block.
@@ -246,23 +211,14 @@ public:
     return block_max_score_;
   }
 
+  // Sets the maximum docID score contained within this block.
   void set_block_max_score(float block_max_score) {
     block_max_score_ = block_max_score;
-  }
-
-  // Returns the actual number of chunks stored in this block, that are actually part of the inverted list for this particular term.
-  int num_actual_chunks() const {
-    return num_chunks_ - starting_chunk_;
   }
 
   // Returns a pointer to the start of the next raw chunk that needs to be decoded.
   const uint32_t* curr_block_data() const {
     return curr_block_data_;
-  }
-
-  // The index of the starting chunk in this block for the inverted list for this particular term.
-  int starting_chunk() const {
-    return starting_chunk_;
   }
 
   // Returns the index of the current chunk being traversed.
@@ -276,7 +232,18 @@ public:
     ++curr_chunk_;
   }
 
-  static const int kBlockSize = BLOCK_SIZE;
+  // The index of the starting chunk in this block for the inverted list for this particular term.
+  int starting_chunk() const {
+    return starting_chunk_;
+  }
+
+  // Returns the total number of chunks in this block.
+  // This includes any chunks that are not part of the inverted list for this particular term.
+  int num_chunks() const {
+    return num_chunks_;
+  }
+
+  static const int kBlockSize = BLOCK_SIZE;  // The fixed size of each block, in bytes.
 
 private:
   static const int kChunkSizeLowerBound = MIN_COMPRESSED_CHUNK_SIZE;
@@ -287,43 +254,82 @@ private:
 
   // For each chunk in the block corresponding to this current BlockDecoder, holds the last docIDs and sizes,
   // where the size is in words, and a word is sizeof(uint32_t). The last docID is always followed by the size, for every chunk, in this order.
-  uint32_t chunk_properties_[kChunkPropertiesDecompressedUpperbound];  // This will require ~11KiB of memory. Alternative is to make dynamic allocations and resize if necessary.
+  // This will require ~11KiB of memory. Alternative is to make dynamic allocations and resize if necessary.
+  uint32_t chunk_properties_[kChunkPropertiesDecompressedUpperbound];
 
-  uint64_t curr_block_num_;                             // The current block number.
-  int block_header_size_;                               // The size of the block header in bytes, including the number of chunks.
-  int num_chunks_;                                      // The total number of chunks this block holds, regardless of which list it is.
-  float block_max_score_;                               // The maximum docID score within this block.
-  int starting_chunk_;                                  // The chunk number of the first chunk in the block of the associated list.
-  int curr_chunk_;                                      // The current actual chunk number we're up to within a block.
-  uint32_t* curr_block_data_;                           // Points to the start of the next chunk to be decoded.
-  ChunkDecoder curr_chunk_decoder_;                     // Decoder for the current chunk we're processing.
-  const CodingPolicy& block_header_decompressor_;       // Decompressor for the block header.
+  float block_max_score_;      // The maximum docID score within this block.
+  uint32_t* curr_block_data_;  // Points to the start of the next chunk to be decoded.
+  int curr_chunk_;             // The current actual chunk number we're up to within a block.
+  int starting_chunk_;         // The chunk number of the first chunk in the block of the associated list.
+  int num_chunks_;             // The total number of chunks this block holds, regardless of which list it is.
 };
 
 /**************************************************************************************************************************************************************
  * ListData
  *
- * Used by the IndexReader during list traversal to hold current state of the list we're traversing.
+ * Implements the basic methods required for inverted list traversal.
+ * Holds the current state of the list we're traversing (tracks the current position within an inverted list).
  **************************************************************************************************************************************************************/
 class ListData {
 public:
-  ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
-           int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
-           const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor,
-           uint32_t external_index_offset, const ExternalIndexReader* external_index_reader, bool single_term_query);
+  enum RetrieveDataType {
+    kDocId, kFrequency, kPosition
+  };
+
+  ListData(CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor,
+           const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor, int layer_num, uint32_t initial_block_num,
+           uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block, int num_blocks, const uint32_t* last_doc_ids,
+           float score_threshold, uint32_t external_index_offset, const ExternalIndexReader* external_index_reader, bool use_positions, bool single_term_query,
+           bool block_skipping);
   ~ListData();
 
-  void FreeQueuedBlocks();
-
+  // Resets the inverted list to it's initial state. After resetting, we can start decoding the list from the beginning again.
   void ResetList(bool single_term_query);
 
-  void AdvanceBlock();
+  // 'data_type' represents the type of index information we want to retrieve.
+  // 'index_data' is an array of size 'index_data_size' where we will store the index data (up to the maximum size it can hold).
+  // Returns the number of index data elements that have been stored into 'index_data'. A return of 0 indicates we retrieved all elements from the index.
+  // Note: when retrieving position data, a return of -1 means that the supplied array needs to be larger to copy all positions for a single docID.
+  // This function is designed to be called multiple times (with the same 'data_type') to get all the index data in chunks.
+  int GetList(RetrieveDataType data_type, uint32_t* index_data, int index_data_size);
+
+  // Loops over the list, decompressing the data type determined by 'data_type'. D-gap decoding does not take place, as we're only interested in decompression.
+  // This is useful for benchmarking purposes or verifying that the list could be properly decoded.
+  int LoopOverList(RetrieveDataType data_type);
+
+  // Returns the next greater than or equal docID to that of 'doc_id'.
+  uint32_t NextGEQ(uint32_t doc_id);
+
+  // Returns the frequency for the current docID.
+  uint32_t GetFreq();
+
+  // Returns the next docID that has a score greater than 'min_score'. Skips ahead by blocks.
+  uint32_t NextGreaterBlockScore(float min_score);
+
+  // Returns the next docID that has a score greater than 'min_score'. Skips ahead by chunks.
+  uint32_t NextGreaterChunkScore(float min_score);
+
+  // Returns the upperbound score of the current block.
+  float GetBlockScoreBound();
+
+  // Returns the upperbound score of the current chunk.
+  float GetChunkScoreBound();
+
+  // Advances to the first block that can contain 'doc_id'. This employs block skipping (if enabled).
   void AdvanceBlock(uint32_t doc_id);
 
+  // Advances to the next block.
+  void AdvanceBlock();
+
+  // Advances to the next chunk.
   void AdvanceChunk();
 
-  BlockDecoder* curr_block_decoder() {
-    return &curr_block_decoder_;
+  const BlockDecoder& curr_block_decoder() {
+    return curr_block_decoder_;
+  }
+
+  const ChunkDecoder& curr_chunk_decoder() {
+    return curr_chunk_decoder_;
   }
 
   int layer_num() const {
@@ -332,22 +338,6 @@ public:
 
   int num_docs() const {
     return num_docs_;
-  }
-
-  int num_docs_left() const {
-    return num_docs_left_;
-  }
-
-  void update_num_docs_left() {
-    num_docs_left_ -= ChunkDecoder::kChunkSize;
-  }
-
-  void set_num_docs_left(int num_docs) {
-    num_docs_left_ = num_docs;
-  }
-
-  int num_docs_last_chunk() const {
-    return num_docs_last_chunk_;
   }
 
   int num_docs_complete_list() const {
@@ -362,37 +352,44 @@ public:
     return num_blocks_;
   }
 
-  uint32_t curr_block_num() const {
-    return curr_block_num_;
-  }
-
-  int num_chunks_last_block_left() const {
-    return num_chunks_last_block_left_;
-  }
-
-  int num_blocks_left() const {
-    return num_blocks_left_;
-  }
-
-  const uint32_t* last_doc_ids() const {
-    return last_doc_ids_;
-  }
-
   float score_threshold() const {
     return score_threshold_;
   }
 
-  uint32_t curr_block_last_doc_id() const {
-    return last_doc_ids_[curr_block_idx_];
+  int term_num() const {
+    return term_num_;
   }
 
-  uint32_t prev_block_last_doc_id() const {
-    return prev_block_last_doc_id_;
+  void set_term_num(int term_num) {
+    term_num_ = term_num;
   }
 
-  void set_prev_block_last_doc_id(uint32_t doc_id) {
-    prev_block_last_doc_id_ = doc_id;
+  uint64_t cached_bytes_read() const {
+    return cached_bytes_read_;
   }
+
+  uint64_t disk_bytes_read() const {
+    return disk_bytes_read_;
+  }
+
+  uint32_t num_blocks_skipped() const {
+    return num_blocks_skipped_;
+  }
+
+  static const uint32_t kNoMoreDocs;  // Sentinel value indicating that there are no more docs available in the list.
+
+private:
+  void Init();
+
+  void FreeQueuedBlocks();
+
+  void SkipBlocks(int num_blocks, uint32_t initial_chunk_num);
+
+  void BlockBinarySearch(uint32_t doc_id);
+
+  void BlockSequentialSearch(uint32_t doc_id);
+
+  void SkipToBlock(uint32_t skip_to_block_idx);
 
   bool initial_block() const {
     return (num_blocks_left_ == num_blocks_) ? true : false;
@@ -411,92 +408,60 @@ public:
     return num_chunks_last_block_left_ != 0;
   }
 
-  int term_num() const {
-    return term_num_;
-  }
+  // Used about once per list.
+  const int kNumLeftoverDocs;   // The uneven number of documents that spilled over into the last chunk of the list.
+                                // (that is, they couldn't be evenly divided by the standard amount of documents in a full chunk).
+  bool single_term_query_;      // A hint from an external source that allows us to optimize list traversal
+                                // if we know that we'll never be doing any list skipping.
+  int layer_num_;               // The layer this list is part of.
+  int num_docs_;                // The total number of documents in this inverted list.
+  int num_docs_complete_list_;  // The total number of documents in the complete inverted list (in case this is just one layer of a complete list).
+                                // We use this amount to calculate the BM25 score, so that the layered and
+                                // non-layered index approaches produce the same document scores.
+  int num_chunks_;              // The total number of chunks we have in this inverted list.
+  int num_chunks_last_block_;   // The number of chunks contained in the last block of this inverted list.
+  uint32_t initial_chunk_num_;  // The initial chunk number this list starts in.
+  uint32_t initial_block_num_;  // The initial block number this list starts in.
+  bool first_block_loaded_;     // (block-level-skipping) Set to true when the first block in this inverted list was loaded. Otherwise, remains unused.
 
-  void set_term_num(int term_num) {
-    term_num_ = term_num;
-  }
-
-  bool single_term_query() const {
-    return single_term_query_;
-  }
-
-  uint64_t cached_bytes_read() const {
-    return cached_bytes_read_;
-  }
-
-  uint64_t disk_bytes_read() const {
-    return disk_bytes_read_;
-  }
-
-  uint32_t num_blocks_skipped() const {
-    return num_blocks_skipped_;
-  }
-
-private:
-  void Init();
-
-  void SkipBlocks(int num_blocks, uint32_t initial_chunk_num);
-
-  void BlockBinarySearch(uint32_t doc_id);
-
-  void BlockSequentialSearch(uint32_t doc_id);
-
-  void SkipToBlock(uint32_t skip_to_block_idx);
-
-  const int kNumLeftoverDocs;        // The uneven number of documents that spilled over into the last chunk of the list.
-                                     // (that is, they couldn't be evenly divided by the standard amount of documents in a full chunk).
-  const int kReadAheadBlocks;        // The number of blocks we want to read ahead into the cache.
-  CacheManager& cache_manager_;      // Used to retrieve blocks from the inverted list.
+  // Used often (i.e. on every invocation of NextGEQ()).
   BlockDecoder curr_block_decoder_;  // The current block being processed in this inverted list.
-
-  int layer_num_;                    // The layer this list is part of.
-  uint32_t initial_chunk_num_;       // The initial chunk number this list starts in.
-  uint32_t initial_block_num_;       // The initial block number this list starts in.
-  uint32_t curr_block_num_;          // The current block number we're up to during traversal of the inverted list.
-  uint32_t curr_block_idx_;          // The current block index (starts from 0) we're up to during traversal of the inverted list.
-
-  int num_docs_;                     // The total number of documents in this inverted list.
-  int num_docs_complete_list_;       // The total number of documents in the complete inverted list (in case this is just one layer of a complete list).
-                                     // We use this amount to calculate the BM25 score, so that the layered and
-                                     // non-layered index approaches produce the same document scores.
-
-  int num_docs_last_chunk_;          // The number of documents contained in the last chunk of this inverted list.
-
-  int num_chunks_;                   // The total number of chunks we have in this inverted list.
-
-  int num_chunks_last_block_;        // The number of chunks contained in the last block of this inverted list.
-  int num_blocks_;                   // The total number of blocks in this inverted list.
-
-  // These help us keep track of the current position within an inverted list.
-  int num_docs_left_;                // The number of documents we have left to traverse in this inverted list (it could be negative by the end).
+  uint32_t curr_block_idx_;          // (block-level-skipping) The current block index (starts from 0) we're up to during traversal of the inverted list.
+  bool block_skipping_;              // (block-level-skipping) Sets whether we should utilize block skipping in NextGEQ().
+  bool use_positions_;               // Determines whether position information will be decoded and made available.
   int num_chunks_last_block_left_;   // The number of chunks left to traverse from the last block (only updated when in the last block).
-  int num_blocks_left_;              // The number of blocks left to traverse in this inverted list.
-  bool first_block_loaded_;          // Set to true when the first block in this inverted list was loaded.
-
-  const uint32_t* last_doc_ids_;     // Pointer to the array of last docIDs of all the blocks in this list.
-
+  ChunkDecoder curr_chunk_decoder_;  // The current chunk being processed in this inverted list.
+  // This is algorithm dependent, but could potentially be used often.
   float score_threshold_;            // The maximum scoring partial score of any docID in this list.
-
-  uint32_t prev_block_last_doc_id_;  // The last docID of the last chunk of the previous block. This is used by the IndexReader as necessary in NextGEQ().
-                                     // It's necessary for the case when a list spans several blocks and the docIDs are gap coded, so that when decoding gaps
-                                     // from docIDs appearing in subsequent blocks (subsequent from the first block), we need to know from what offset
-                                     // (the last docID of the previous block) those docIDs start at.
-  uint32_t last_queued_block_num_;   // The last block number that was not yet queued for transfer.
-
   int term_num_;                     // May be used by the query processor to map this object back to the term it corresponds to.
 
+  // Used about once per chunk (i.e. when we decode the chunk).
+  const CodingPolicy& doc_id_decompressor_;     // DocID decoder.
+  const CodingPolicy& frequency_decompressor_;  // Frequency decoder.
+  const CodingPolicy& position_decompressor_;   // Position decoder.
+  int num_docs_last_chunk_;                     // The number of documents contained in the last chunk of this inverted list.
+  int num_docs_left_;                           // The number of documents we have left to traverse in this inverted list (it could be negative by the end).
+  int num_blocks_;                              // The total number of blocks in this inverted list.
+  int num_blocks_left_;                         // The number of blocks left to traverse in this inverted list.
+  uint32_t prev_block_last_doc_id_;             // The last docID of the last chunk of the previous block.
+                                                // This is used by the IndexReader as necessary in NextGEQ(). It's necessary for the case when a list spans
+                                                // several blocks and the docIDs are gap coded, so that when decoding gaps from docIDs appearing in subsequent
+                                                // blocks (subsequent from the first block), we need to know from what offset
+                                                // (the last docID of the previous block) those docIDs start at.
   // For simultaneous traversal of the external index (if any).
   ExternalIndexReader::ExternalIndexPointer external_index_pointer_;
   const ExternalIndexReader* external_index_reader_;
 
-  bool single_term_query_;           // A hint from an external source that allows us to optimize list traversal if we know that we'll never be doing any list skipping.
-
-  uint64_t cached_bytes_read_;       // Keeps track of the number of bytes read from the cache for this list.
-  uint64_t disk_bytes_read_;         // Keeps track of the number of bytes read from the disk for this list.
-  uint32_t num_blocks_skipped_;      // Keeps track of the number of blocks we were able to skip (when using in-memory block index).
+  // Used about once per block (i.e. when we advance the block).
+  CacheManager& cache_manager_;                    // Used to retrieve blocks from the inverted list.
+  const CodingPolicy& block_header_decompressor_;  // Block header decoder.
+  const int kReadAheadBlocks;                      // The number of blocks we want to read ahead into the cache.
+  const uint32_t* last_doc_ids_;                   // (block-level-skipping) Pointer to the array of last docIDs of all the blocks in this list.
+  uint32_t curr_block_num_;                        // The current block number we're up to during traversal of the inverted list.
+  uint32_t last_queued_block_num_;                 // The last block number that was not yet queued for transfer.
+  uint64_t cached_bytes_read_;                     // Keeps track of the number of bytes read from the cache for this list.
+  uint64_t disk_bytes_read_;                       // Keeps track of the number of bytes read from the disk for this list.
+  uint32_t num_blocks_skipped_;                    // Keeps track of the number of blocks we were able to skip (when using in-memory block index).
 };
 
 /**************************************************************************************************************************************************************
@@ -657,10 +622,10 @@ private:
  * Lexicon
  *
  * TODO: Would be wise to setup a large memory pool (we can even count during lexicon construction how many bytes we'll need). Then the LexiconData class
- *       can just take pointers to data in this memory pool without copying it (or just 1 pointer and decode it on the fly). This means variable sized data could be
- *       stored more compactly, without memory fragmentation. Best of all, we can adapt our decoding technique based on what data we stored in this memory pool;
- *       then we won't have to, say, store layered information if the index is only single layered. This would only be necessary for when we read the whole
- *       lexicon into main memory (not when merging).
+ *       can just take pointers to data in this memory pool without copying it (or just 1 pointer and decode it on the fly). This means variable sized data
+ *       could be stored more compactly, without memory fragmentation. Best of all, we can adapt our decoding technique based on what data we stored in this
+ *       memory pool; then we won't have to, say, store layered information if the index is only single layered. This would only be necessary for when we read
+ *       the whole lexicon into main memory (not when merging).
  **************************************************************************************************************************************************************/
 class Lexicon {
 public:
@@ -706,13 +671,13 @@ private:
   char* lexicon_buffer_ptr_;                    // Current position in the lexicon buffer.
   int lexicon_fd_;                              // File descriptor for the lexicon.
   off_t lexicon_file_size_;                     // The size of the on disk lexicon file.
-  off_t num_bytes_read_;                          // Number of bytes of lexicon read so far.
+  off_t num_bytes_read_;                        // Number of bytes of lexicon read so far.
 };
 
 /**************************************************************************************************************************************************************
  * IndexReader
  *
- * Implements the basic methods required for inverted index traversal.
+ * Provides access to the various structures that comprise an index such as the inverted lists, lexicon, document map, and meta file.
  **************************************************************************************************************************************************************/
 class IndexReader {
 public:
@@ -720,52 +685,24 @@ public:
     kRandomQuery, kMerge
   };
 
-  enum DocumentOrder {
-    kSorted, kSortedGapCoded
-  };
-
-  enum IndexDataType {
-    kDocId, kFrequency, kPosition
-  };
-
-  IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
+  IndexReader(Purpose purpose, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
               const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader = NULL);
 
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query = false);
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query, int term_num);
-
   void CloseList(ListData* list_data);
-
-  uint32_t NextGEQ(ListData* list_data, uint32_t doc_id);
-
-  float GetBlockScoreBound(ListData* list_data);
-  float GetChunkScoreBound(ListData* list_data);
-
-  uint32_t NextGreaterScore(ListData* list_data, float min_score);
-
-  uint32_t GetFreq(ListData* list_data, uint32_t doc_id);
-
-  // 'list_data' is a pointer to the inverted list information, returned by 'OpenList()'.
-  // 'data_type' represents the type of index information we want to retrieve.
-  // 'index_data' is an array of size 'index_data_size' where we will store the index data (up to the maximum size it can hold).
-  // Returns the number of index data elements that have been stored into 'index_data'. A return of 0 indicates we retrieved all elements from the index.
-  // Note: when retrieving position data, a return of -1 means that the supplied array needs to be larger to copy all positions for a single docID.
-  // This function is designed to be called multiple times (with the same 'list_data' and 'data_type') to get all the index data in chunks.
-  int GetList(ListData* list_data, IndexDataType data_type, uint32_t* index_data, int index_data_size);
-
-  int LoopOverList(ListData* list_data, IndexDataType data_type);
 
   int GetDocLen(uint32_t doc_id);
   const char* GetDocUrl(uint32_t doc_id);
+
+  Lexicon& lexicon() {
+    return lexicon_;
+  }
 
   void ResetStats() {
     total_cached_bytes_read_ = 0;
     total_disk_bytes_read_ = 0;
     total_num_lists_accessed_ = 0;
-  }
-
-  Lexicon& lexicon() {
-    return lexicon_;
   }
 
   const DocumentMapReader& document_map() const {
@@ -830,7 +767,6 @@ public:
 
 private:
   Purpose purpose_;                    // Changes index reader behavior based on what we're using it for.
-  DocumentOrder document_order_;       // The way the docIDs are ordered in the index.
   const char* kLexiconSizeKey;         // The key in the configuration file used to define the lexicon size.
   const long int kLexiconSize;         // The size of the hash table for the lexicon.
   Lexicon lexicon_;                    // The lexicon data structure.

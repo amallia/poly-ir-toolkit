@@ -58,73 +58,59 @@ using namespace std;
 /**************************************************************************************************************************************************************
  * ChunkDecoder
  *
+ * The layout of the class variables is somewhat optimized, such that the most frequently used members should appear towards the top. The large arrays appear
+ * towards the bottom because there will much unutilized space towards the end, since they are upperbounded.
  **************************************************************************************************************************************************************/
 const int ChunkDecoder::kChunkSize;      // Initialized in the class definition.
 const int ChunkDecoder::kMaxProperties;  // Initialized in the class definition.
 
-ChunkDecoder::ChunkDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor,
-                           const CodingPolicy& position_decompressor) :
-  num_docs_(0),
+ChunkDecoder::ChunkDecoder() :
   curr_document_offset_(0),
+  prev_decoded_doc_id_(0),
+  decoded_doc_ids_(false),
+  decoded_properties_(false),
+  chunk_max_score_(numeric_limits<float>::max()),
+  num_positions_(0),
   prev_document_offset_(0),
   curr_position_offset_(0),
-  prev_decoded_doc_id_(0),
-  num_positions_(0),
-  decoded_properties_(false),
-  curr_buffer_position_(NULL),
-  decoded_(false),
-  chunk_max_score_(numeric_limits<float>::max()),
-  doc_id_decompressor_(doc_id_decompressor),
-  frequency_decompressor_(frequency_decompressor),
-  position_decompressor_(position_decompressor) {
+  num_docs_(0),
+  curr_buffer_position_(NULL) {
 }
 
-void ChunkDecoder::InitChunk(const ChunkProperties& properties, const uint32_t* buffer, int num_docs) {
-  properties_ = properties;
-  num_docs_ = num_docs;
+void ChunkDecoder::InitChunk(int num_docs, const uint32_t* buffer) {
+  // Note that 'chunk_max_score_' is set by ListData if an external index is used;
+  // if there is no external index, the value will never change from that set in the initializer list.
+  // Also, 'num_positions_' is properly set upon decoding the positions.
   curr_document_offset_ = 0;
+  prev_decoded_doc_id_ = 0;
+  decoded_doc_ids_ = false;
+  decoded_properties_ = false;
+
   prev_document_offset_ = 0;
   curr_position_offset_ = 0;
-  prev_decoded_doc_id_ = 0;
-  decoded_properties_ = false;
+  num_docs_ = num_docs;
   curr_buffer_position_ = buffer;
-  decoded_ = false;
-  chunk_max_score_ = numeric_limits<float>::max();
 }
 
-void ChunkDecoder::DecodeDocIds() {
+void ChunkDecoder::DecodeDocIds(const CodingPolicy& doc_id_decompressor) {
   assert(curr_buffer_position_ != NULL);
-  if (doc_id_decompressor_.primary_coder_is_blockwise())
-    assert(doc_id_decompressor_.block_size() == kChunkSize);
+  if (doc_id_decompressor.primary_coder_is_blockwise())
+    assert(doc_id_decompressor.block_size() == kChunkSize);
 
-  // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = doc_id_decompressor_.Decompress(const_cast<uint32_t*> (curr_buffer_position_), doc_ids_, num_docs_);
-  curr_buffer_position_ += num_words_consumed;
-  decoded_ = true;
+  // Advance the current buffer position by the number of words we decompressed.
+  curr_buffer_position_ += doc_id_decompressor.Decompress(const_cast<uint32_t*> (curr_buffer_position_), doc_ids_, num_docs_);
+  decoded_doc_ids_ = true;
 }
 
-void ChunkDecoder::DecodeProperties() {
-  curr_buffer_position_ += DecodeFrequencies(curr_buffer_position_);
-  if (properties_.includes_positions)
-    curr_buffer_position_ += DecodePositions(curr_buffer_position_);
+void ChunkDecoder::DecodeFrequencies(const CodingPolicy& frequency_decompressor) {
+  if (frequency_decompressor.primary_coder_is_blockwise())
+    assert(frequency_decompressor.block_size() == kChunkSize);
 
-  curr_buffer_position_ = NULL;  // This pointer is no longer valid.
-  decoded_properties_ = true;
+  // Advance the current buffer position by the number of words we decompressed.
+  curr_buffer_position_ += frequency_decompressor.Decompress(const_cast<uint32_t*> (curr_buffer_position_), frequencies_, num_docs_);
 }
 
-int ChunkDecoder::DecodeFrequencies(const uint32_t* compressed_frequencies) {
-  assert(compressed_frequencies != NULL);
-  // A word is meant to be sizeof(uint32_t) bytes in this context.
-  if (frequency_decompressor_.primary_coder_is_blockwise())
-    assert(frequency_decompressor_.block_size() == kChunkSize);
-
-  int num_words_consumed = frequency_decompressor_.Decompress(const_cast<uint32_t*> (compressed_frequencies), frequencies_, num_docs_);
-  return num_words_consumed;
-}
-
-int ChunkDecoder::DecodePositions(const uint32_t* compressed_positions) {
-  assert(compressed_positions != NULL);
-
+void ChunkDecoder::DecodePositions(const CodingPolicy& position_decompressor) {
   num_positions_ = 0;
   // Count the number of positions we have in total by summing up all the frequencies.
   for (int i = 0; i < num_docs_; ++i) {
@@ -133,12 +119,11 @@ int ChunkDecoder::DecodePositions(const uint32_t* compressed_positions) {
   }
 
   assert(num_positions_ <= (ChunkDecoder::kChunkSize * ChunkDecoder::kMaxProperties));
-  if (position_decompressor_.primary_coder_is_blockwise())
-    assert(position_decompressor_.block_size() >= kChunkSize);
+  if (position_decompressor.primary_coder_is_blockwise())
+    assert(position_decompressor.block_size() >= kChunkSize);
 
-  // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = position_decompressor_.Decompress(const_cast<uint32_t*> (compressed_positions), positions_, num_positions_);
-  return num_words_consumed;
+  // Advance the current buffer position by the number of words we decompressed.
+  curr_buffer_position_ += position_decompressor.Decompress(const_cast<uint32_t*> (curr_buffer_position_), positions_, num_positions_);
 }
 
 void ChunkDecoder::UpdatePropertiesOffset() {
@@ -153,38 +138,32 @@ void ChunkDecoder::UpdatePropertiesOffset() {
 /**************************************************************************************************************************************************************
  * BlockDecoder
  *
- * TODO: For certain types of queries (single word), we can avoid decompressing the block header (since we won't be able to do chunk skipping).
- *       To implement, we need an additional piece of data -- the integer offset into the first block to the chunk in which the list starts.
- *       This can be stored in the lexicon.
  **************************************************************************************************************************************************************/
 const int BlockDecoder::kBlockSize;                              // Initialized in the class definition.
 const int BlockDecoder::kChunkSizeLowerBound;                    // Initialized in the class definition.
 const int BlockDecoder::kChunkPropertiesDecompressedUpperbound;  // Initialized in the class definition.
 
-BlockDecoder::BlockDecoder(const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor,
-                           const CodingPolicy& block_header_decompressor) :
-  curr_block_num_(0),
-  block_header_size_(0),
-  num_chunks_(0),
+BlockDecoder::BlockDecoder() :
   block_max_score_(numeric_limits<float>::max()),
-  starting_chunk_(0),
-  curr_chunk_(0),
   curr_block_data_(NULL),
-  curr_chunk_decoder_(doc_id_decompressor, frequency_decompressor, position_decompressor),
-  block_header_decompressor_(block_header_decompressor) {
+  curr_chunk_(0),
+  starting_chunk_(0),
+  num_chunks_(0) {
 }
 
-void BlockDecoder::InitBlock(uint64_t block_num, int starting_chunk, uint32_t* block_data) {
-  curr_block_num_ = block_num;
-  starting_chunk_ = starting_chunk;
-  curr_chunk_ = starting_chunk_;
+void BlockDecoder::InitBlock(const CodingPolicy& block_header_decompressor, int starting_chunk, uint32_t* block_data) {
+  // Note that 'block_max_score_' is set by ListData if an external index is used;
+  // if there is no external index, the value will never change from that set in the initializer list.
   curr_block_data_ = block_data;
-  block_max_score_ = numeric_limits<float>::max();
+  starting_chunk_ = starting_chunk;
+  curr_chunk_ = starting_chunk;
 
+  // The block header size is the size of the block header in bytes.
+  // It also includes the number of chunks as part of the header.
+  // Currently, the block header size is not used for anything.
   uint32_t block_header_size;
   memcpy(&block_header_size, curr_block_data_, sizeof(block_header_size));
-  block_header_size_ = block_header_size;
-  assert(block_header_size_ > 0);
+  assert(block_header_size > 0);
   curr_block_data_ += 1;
 
   uint32_t num_chunks;
@@ -193,24 +172,21 @@ void BlockDecoder::InitBlock(uint64_t block_num, int starting_chunk, uint32_t* b
   assert(num_chunks_ > 0);
   curr_block_data_ += 1;
 
-  curr_block_data_ += DecodeHeader(curr_block_data_);
+  DecodeHeader(block_header_decompressor);
 
   // Adjust our block data pointer to point to the starting chunk of this particular list.
   for (int i = 0; i < starting_chunk_; ++i) {
     curr_block_data_ += chunk_size(i);
   }
-
-  curr_chunk_decoder_.set_decoded(false);
 }
 
-int BlockDecoder::DecodeHeader(uint32_t* compressed_header) {
+void BlockDecoder::DecodeHeader(const CodingPolicy& block_header_decompressor) {
   int header_len = num_chunks_ * 2;  // Number of integer entries we have to decompress (two integers per chunk).
   if (header_len > kChunkPropertiesDecompressedUpperbound)
     assert(false);
 
-  // A word is meant to be sizeof(uint32_t) bytes in this context.
-  int num_words_consumed = block_header_decompressor_.Decompress(compressed_header, chunk_properties_, header_len);
-  return num_words_consumed;
+  // Advance the current block data position by the number of words we decompressed.
+  curr_block_data_ += block_header_decompressor.Decompress(curr_block_data_, chunk_properties_, header_len);
 }
 
 /**************************************************************************************************************************************************************
@@ -222,37 +198,45 @@ int BlockDecoder::DecodeHeader(uint32_t* compressed_header) {
  * The latter method should be used if we are utilizing a block level index and whole blocks can be skipped (so that we don't know how many documents were in
  * the block).
  **************************************************************************************************************************************************************/
-ListData::ListData(int layer_num, uint32_t initial_block_num, uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block,
-                   int num_blocks, const uint32_t* last_doc_ids, float score_threshold, CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor,
-                   const CodingPolicy& frequency_decompressor, const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor,
-                   uint32_t external_index_offset, const ExternalIndexReader* external_index_reader, bool single_term_query) :
+const uint32_t ListData::kNoMoreDocs = numeric_limits<uint32_t>::max();
+
+ListData::ListData(CacheManager& cache_manager, const CodingPolicy& doc_id_decompressor, const CodingPolicy& frequency_decompressor,
+                   const CodingPolicy& position_decompressor, const CodingPolicy& block_header_decompressor, int layer_num, uint32_t initial_block_num,
+                   uint32_t initial_chunk_num, int num_docs, int num_docs_complete_list, int num_chunks_last_block, int num_blocks,
+                   const uint32_t* last_doc_ids, float score_threshold, uint32_t external_index_offset, const ExternalIndexReader* external_index_reader,
+                   bool use_positions, bool single_term_query, bool block_skipping) :
   kNumLeftoverDocs(num_docs % ChunkDecoder::kChunkSize),
-  kReadAheadBlocks(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kReadAheadBlocks))),
-  cache_manager_(cache_manager),
-  curr_block_decoder_(doc_id_decompressor, frequency_decompressor, position_decompressor, block_header_decompressor),
+  single_term_query_(single_term_query),
   layer_num_(layer_num),
-  initial_chunk_num_(initial_chunk_num),
-  initial_block_num_(initial_block_num),
-  curr_block_num_(initial_block_num_),
-  curr_block_idx_(0),
   num_docs_(num_docs),
   num_docs_complete_list_(num_docs_complete_list),
-  num_docs_last_chunk_(kNumLeftoverDocs == 0 ? ChunkDecoder::kChunkSize : kNumLeftoverDocs),
   num_chunks_((num_docs / ChunkDecoder::kChunkSize) + ((kNumLeftoverDocs == 0) ? 0 : 1)),
   num_chunks_last_block_(num_chunks_last_block),
-  num_blocks_(num_blocks),
-  num_docs_left_(num_docs_),
-  num_chunks_last_block_left_(num_chunks_last_block_),
-  num_blocks_left_(num_blocks_),
+  initial_chunk_num_(initial_chunk_num),
+  initial_block_num_(initial_block_num),
   first_block_loaded_(false),
-  last_doc_ids_(last_doc_ids),
+  curr_block_idx_(0),
+  block_skipping_(block_skipping),
+  use_positions_(use_positions),
+  num_chunks_last_block_left_(num_chunks_last_block_),
   score_threshold_(score_threshold),
-  prev_block_last_doc_id_(0),
-  last_queued_block_num_(curr_block_num_),
   term_num_(-1),
+  doc_id_decompressor_(doc_id_decompressor),
+  frequency_decompressor_(frequency_decompressor),
+  position_decompressor_(position_decompressor),
+  num_docs_last_chunk_(kNumLeftoverDocs == 0 ? ChunkDecoder::kChunkSize : kNumLeftoverDocs),
+  num_docs_left_(num_docs_),
+  num_blocks_(num_blocks),
+  num_blocks_left_(num_blocks_),
+  prev_block_last_doc_id_(0),
   external_index_pointer_(initial_block_num, external_index_offset),
   external_index_reader_(external_index_reader),
-  single_term_query_(single_term_query),
+  cache_manager_(cache_manager),
+  block_header_decompressor_(block_header_decompressor),
+  kReadAheadBlocks(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kReadAheadBlocks))),
+  last_doc_ids_(last_doc_ids),
+  curr_block_num_(initial_block_num_),
+  last_queued_block_num_(curr_block_num_),
   cached_bytes_read_(0),
   disk_bytes_read_(0),
   num_blocks_skipped_(0) {
@@ -298,15 +282,15 @@ void ListData::FreeQueuedBlocks() {
 void ListData::ResetList(bool single_term_query) {
   FreeQueuedBlocks();
 
-  curr_block_num_ = initial_block_num_;
-  curr_block_idx_ = 0;
-  num_docs_left_ = num_docs_;
-  num_chunks_last_block_left_ = num_chunks_last_block_;
-  num_blocks_left_ = num_blocks_;
-  first_block_loaded_ = false;
-  prev_block_last_doc_id_ = 0;
-  last_queued_block_num_ = curr_block_num_;
   single_term_query_ = single_term_query;
+  first_block_loaded_ = false;
+  curr_block_idx_ = 0;
+  num_chunks_last_block_left_ = num_chunks_last_block_;
+  num_docs_left_ = num_docs_;
+  num_blocks_left_ = num_blocks_;
+  prev_block_last_doc_id_ = 0;
+  curr_block_num_ = initial_block_num_;
+  last_queued_block_num_ = curr_block_num_;
   cached_bytes_read_ = 0;
   disk_bytes_read_ = 0;
   num_blocks_skipped_ = 0;
@@ -314,6 +298,372 @@ void ListData::ResetList(bool single_term_query) {
   external_index_pointer_.Reset();
 
   Init();
+}
+
+int ListData::GetList(RetrieveDataType data_type, uint32_t* index_data, int index_data_size) {
+  int curr_index_data_idx = 0;
+  uint32_t next_doc_id = 0;
+
+  uint32_t curr_doc_id;
+  uint32_t curr_frequency;
+  const uint32_t* curr_positions;
+
+  // Necessary for positions. If we have started decoding the list (on the previous call to this function)
+  // but stopped because we couldn't copy all the positions, copy them now.
+  if (data_type == kPosition && curr_chunk_decoder_.decoded_doc_ids()) {
+    curr_frequency = GetFreq();
+    curr_positions = curr_chunk_decoder_.current_positions();
+    if (static_cast<int> (curr_frequency) <= index_data_size) {
+      // Copy the positions.
+      for (size_t i = 0; i < curr_frequency; ++i) {
+        index_data[curr_index_data_idx++] = curr_positions[i];
+      }
+    } else {
+      return -1;  // Indicates the array needs to be larger to retrieve the positions.
+    }
+  }
+
+  while (curr_index_data_idx < index_data_size && (curr_doc_id = NextGEQ(next_doc_id)) < kNoMoreDocs) {
+    next_doc_id = curr_doc_id + 1;
+
+    bool continue_next = false;
+
+    switch (data_type) {
+      case kDocId:
+        // Copy the docID.
+        index_data[curr_index_data_idx++] = curr_doc_id;
+        break;
+
+      case kFrequency:
+        // Copy the frequency.
+        index_data[curr_index_data_idx++] = GetFreq();
+        break;
+
+      case kPosition:
+        curr_frequency = GetFreq();
+        curr_positions = curr_chunk_decoder_.current_positions();
+
+        // We need to make sure we don't consume positions unless *all* of them fit into the supplied array.
+        if (static_cast<int> (curr_index_data_idx + curr_frequency) <= index_data_size) {
+          // Copy the positions.
+          for (size_t i = 0; i < curr_frequency; ++i) {
+            index_data[curr_index_data_idx++] = curr_positions[i];
+          }
+        } else {
+          // If this is the position data for the first document that doesn't fit into the supplied array,
+          // need to indicate for the user that the supplied array needs to be larger (instead of misleadingly returning 0).
+          if (curr_index_data_idx == 0) {
+            return -1;
+          }
+          continue_next = true;
+        }
+        break;
+
+      default:
+        assert(false);
+    }
+
+    if (continue_next) {
+      break;
+    }
+  }
+
+  // Returns the number of data items decoded and stored into the supplied array.
+  // No more data left to consume after we return 0.
+  return curr_index_data_idx;
+}
+
+int ListData::LoopOverList(RetrieveDataType data_type) {
+  int k;
+  uint32_t curr_frequency;
+
+  int count = 0;
+
+  // We can use the number of documents left in a list to see if we finished traversing the list
+  // because we'll never be doing any block skipping (we're only traversing a single list).
+  while (num_docs_left_ > 0) {
+    if (curr_block_decoder_.curr_chunk() < curr_block_decoder_.num_chunks()) {
+      // Create a new chunk and add it to the block.
+      curr_chunk_decoder_.InitChunk(std::min(ChunkDecoder::kChunkSize, num_docs_left_), curr_block_decoder_.curr_block_data());
+      curr_chunk_decoder_.DecodeDocIds(doc_id_decompressor_);
+
+      for (k = 0; k < curr_chunk_decoder_.num_docs(); ++k) {
+        switch (data_type) {
+          case kDocId:
+            curr_chunk_decoder_.doc_id(k);
+            ++count;
+            break;
+
+          case kFrequency:
+            curr_chunk_decoder_.set_curr_document_offset(k);  // Offset for the frequency.
+            curr_frequency = GetFreq();
+            ++count;
+            break;
+
+          case kPosition:
+            curr_chunk_decoder_.set_curr_document_offset(k);  // Offset for the frequency.
+            curr_frequency = GetFreq();
+            curr_chunk_decoder_.current_positions();
+            count += curr_frequency;
+            break;
+
+          default:
+            assert(false);
+        }
+      }
+
+      // Moving on to the next chunk.
+      curr_block_decoder_.advance_curr_chunk();
+      // Update the number of documents left to process after processing the complete chunk.
+      num_docs_left_ -= ChunkDecoder::kChunkSize;
+    } else {
+      // We're moving on to process the next block. This block is of no use to us anymore.
+      AdvanceBlock();
+    }
+  }
+
+  return count;
+}
+
+uint32_t ListData::NextGEQ(uint32_t doc_id) {
+  // For standard DAAT OR mode processing, setting this parameter to 'false' resulted in an improvement of a few milliseconds in terms of average query latency,
+  // which was a little surprising.
+  const bool kDecodeAllChunkDGaps = false;
+
+  // Since we now have the capability to skip over multiple blocks without even decoding the block header,
+  // we can't tell how many documents or chunks are left in the list. For this reason, we now count the number of blocks remaining to be processed
+  // in the list as well as how many chunks are present in the last remaining block of the list.
+  // Additionally, we have to determine the number of chunks present in the last chunk of a list through the total number
+  // of documents present in the list.
+
+  // In-memory block level index has been built, so we can do block skipping.
+  if (block_skipping_) {
+    // TODO: Can you mix the binary search and sequential search for skipping blocks to optimize performance?
+    AdvanceBlock(doc_id);
+  }
+
+  int i;
+  int num_chunk_docs;
+  int curr_chunk_num;
+  int curr_document_offset;
+  uint32_t curr_doc_id;
+  uint32_t prev_doc_id;
+
+  while (has_more()) {
+    curr_chunk_num = curr_block_decoder_.curr_chunk();
+    if (curr_chunk_num < curr_block_decoder_.num_chunks()) {
+      // Decide whether or not we can skip past this chunk by checking the current docID we're looking for against the last docID of this chunk.
+      if (doc_id <= curr_block_decoder_.chunk_last_doc_id(curr_chunk_num)) {  // We cannot skip past this chunk.
+        // Check if we previously decoded this chunk.
+        if (curr_chunk_decoder_.decoded_doc_ids() == false) {  // We have to decode this chunk.
+          if (external_index_reader_ != NULL) {
+            // Advance the external index pointer to the next chunk.
+            external_index_reader_->AdvanceToChunk(curr_chunk_num, &external_index_pointer_);
+            // Set the max score of the chunk, which we get from the external index.
+            curr_chunk_decoder_.set_chunk_max_score(external_index_pointer_.chunk_max_score);
+          }
+
+          // TODO: If we know there are no block skips possible (it's a single term query, unoptimized OR query, etc)
+          //       We can keep track of the number of documents left instead to save on some branchy code.
+          //       Note that when doing block skips, we cannot keep track of the number of documents left since we don't know
+          //       the number of documents for a particular list in a block.
+          //       This information can now be easily stored in the external index.
+          //       Would be interesting to make use of it to try to make NextGEQ() less branchy.
+          // num_chunk_docs = min(ChunkDecoder::kChunkSize, num_docs_left());
+          num_chunk_docs = ((final_block() && final_chunk()) ? num_docs_last_chunk_ : ChunkDecoder::kChunkSize);
+          curr_chunk_decoder_.InitChunk(num_chunk_docs, curr_block_decoder_.curr_block_data());
+          curr_chunk_decoder_.DecodeDocIds(doc_id_decompressor_);
+
+          // Need to do these offsets only if we haven't done them before for this chunk. This is to handle d-gap coding.
+          // List is across blocks and we need offset from previous block.
+          if (!initial_block() && curr_chunk_num == 0) {
+            curr_chunk_decoder_.update_prev_decoded_doc_id(prev_block_last_doc_id_);
+          }
+
+          // We need offset from previous chunk if this is not the first chunk in the list.
+          if (curr_chunk_num > curr_block_decoder_.starting_chunk()) {
+            curr_chunk_decoder_.update_prev_decoded_doc_id(curr_block_decoder_.chunk_last_doc_id(curr_chunk_num - 1));
+          }
+
+          // We always decode the first d-gap in the chunk.
+          curr_chunk_decoder_.update_prev_decoded_doc_id(curr_chunk_decoder_.doc_id(0));
+
+          if (kDecodeAllChunkDGaps) {
+            // Can decode all d-gaps in one swoop.
+            prev_doc_id = curr_chunk_decoder_.prev_decoded_doc_id();
+            curr_chunk_decoder_.set_doc_id(0, prev_doc_id);
+            for (i = 1; i < curr_chunk_decoder_.num_docs(); ++i) {
+              prev_doc_id += curr_chunk_decoder_.doc_id(i);
+              curr_chunk_decoder_.set_doc_id(i, prev_doc_id);
+            }
+          }
+        }
+
+        if (!kDecodeAllChunkDGaps) {
+          curr_doc_id = curr_chunk_decoder_.prev_decoded_doc_id();
+        }
+
+        // We always start the chunk offset from the last returned (or first, if this is a newly decoded chunk) document.
+        curr_document_offset = curr_chunk_decoder_.curr_document_offset();
+        for (i = curr_document_offset; i < curr_chunk_decoder_.num_docs(); ++i) {
+          if (kDecodeAllChunkDGaps) {
+            curr_doc_id = curr_chunk_decoder_.doc_id(i);
+          } else {
+            if (i != curr_document_offset)
+              curr_doc_id += curr_chunk_decoder_.doc_id(i);  // Necessary for d-gap coding.
+          }
+
+          // Found the docID we're looking for.
+          if (curr_doc_id >= doc_id) {
+            curr_chunk_decoder_.set_curr_document_offset(i);  // Offset for the frequency.
+            if (!kDecodeAllChunkDGaps) {
+              curr_chunk_decoder_.set_prev_decoded_doc_id(curr_doc_id);
+            }
+
+            return curr_doc_id;
+          }
+        }
+      } else {
+        // Need to advance the external index since we're skipping a chunk (only if we have not already decoded it above).
+        if (external_index_reader_ != NULL && curr_chunk_decoder_.decoded_doc_ids() == false) {
+          // Advance the external index pointer to the next chunk.
+          // Note that it's not necessary to set the chunk max score, since we'll just be looping around to the next chunk and setting the score there.
+          external_index_reader_->AdvanceToChunk(curr_chunk_num, &external_index_pointer_);
+        }
+      }
+
+      AdvanceChunk();
+    } else {
+      // We're moving on to process the next block. This block is of no use to us anymore.
+      AdvanceBlock();
+    }
+  }
+
+  // No other chunks in this list have a docID >= 'doc_id', so return this sentinel value to indicate this.
+  return kNoMoreDocs;
+}
+
+uint32_t ListData::GetFreq() {
+  if (use_positions_) {
+    // Decode the frequencies and positions if we haven't already.
+    if (!curr_chunk_decoder_.decoded_properties()) {
+      curr_chunk_decoder_.DecodeFrequencies(frequency_decompressor_);
+      curr_chunk_decoder_.DecodePositions(position_decompressor_);
+      curr_chunk_decoder_.set_decoded_properties(true);
+    }
+    // Need to set the correct offset for the positions and other frequency dependent properties.
+    curr_chunk_decoder_.UpdatePropertiesOffset();
+  } else {
+    // Decode the frequencies if we haven't already.
+    if (!curr_chunk_decoder_.decoded_properties()) {
+      curr_chunk_decoder_.DecodeFrequencies(frequency_decompressor_);
+      curr_chunk_decoder_.set_decoded_properties(true);
+    }
+  }
+
+  return curr_chunk_decoder_.current_frequency();
+}
+
+uint32_t ListData::NextGreaterBlockScore(float min_score) {
+  assert(external_index_reader_ != NULL);
+  assert(block_skipping_ == false);
+
+  while (num_blocks_left_ > 0) {
+    if (curr_block_decoder_.block_max_score() <= min_score) {
+      AdvanceBlock();
+    } else {
+      return NextGEQ(0);
+    }
+  }
+
+  // No other blocks in this list have a score > 'min_score', so return this sentinel value to indicate this.
+  return kNoMoreDocs;
+}
+
+// TODO: For compatibility with in-memory block-level index skipping, the external index must be able to properly skip over all the remaining chunks of a block
+//       that we might not have explicitly requested (because we just skipped the block).
+uint32_t ListData::NextGreaterChunkScore(float min_score) {
+  assert(external_index_reader_ != NULL);
+  assert(block_skipping_ == false);
+
+  int curr_chunk_num;
+
+  while (has_more()) {
+    curr_chunk_num = curr_block_decoder_.curr_chunk();
+    if (curr_chunk_num < curr_block_decoder_.num_chunks()) {
+      // Need this so we know the score of the next chunk. Only do this after we have skipped/advanced over to the next chunk.
+      if (curr_chunk_decoder_.decoded_doc_ids() == false) {
+        // Advance the external index pointer to the next chunk.
+        external_index_reader_->AdvanceToChunk(curr_chunk_num, &external_index_pointer_);
+
+        // Set the max score of the chunk, which we get from the external index.
+        // We could be checking the score to decide whether we can skip this chunk.
+        curr_chunk_decoder_.set_chunk_max_score(external_index_pointer_.chunk_max_score);
+      }
+
+      if (curr_chunk_decoder_.chunk_max_score() > min_score) {
+        return NextGEQ(0);
+      }
+
+#ifdef INDEX_READER_DEBUG
+      // Note that this assumes that 'kDecodeAllChunkDGaps' in NextGEQ() is set to true.
+      // It also assumes we use the number of chunks in the last block to determine the number of docIDs per chunk.
+      cout << "Skipping chunk with the following docIDs." << endl;
+      if (curr_chunk_decoder_.decoded_doc_ids() == false) {
+        int num_chunk_docs = ((final_block() && final_chunk()) ? num_docs_last_chunk_ : ChunkDecoder::kChunkSize);
+        curr_chunk_decoder_.InitChunk(num_chunk_docs, curr_block_decoder_.curr_block_data());
+        curr_chunk_decoder_.DecodeDocIds(doc_id_decompressor_);
+
+        // Need to do these offsets only if we haven't done them before for this chunk. This is to handle d-gap coding.
+        // List is across blocks and we need offset from previous block.
+        if (!initial_block() && curr_chunk_num == 0) {
+          curr_chunk_decoder_.update_prev_decoded_doc_id(prev_block_last_doc_id_);
+        }
+
+        // We need offset from previous chunk if this is not the first chunk in the list.
+        if (curr_chunk_num > curr_block_decoder_.starting_chunk()) {
+          curr_chunk_decoder_.update_prev_decoded_doc_id(curr_block_decoder_.chunk_last_doc_id(curr_chunk_num - 1));
+        }
+
+        // We always decode the first d-gap in the chunk.
+        curr_chunk_decoder_.update_prev_decoded_doc_id(curr_chunk_decoder_.doc_id(0));
+
+        // Decode all d-gaps.
+        uint32_t prev_doc_id = curr_chunk_decoder_.prev_decoded_doc_id();
+        curr_chunk_decoder_.set_doc_id(0, prev_doc_id);
+        for (int i = 1; i < curr_chunk_decoder_.num_docs(); ++i) {
+          prev_doc_id += curr_chunk_decoder_.doc_id(i);
+          curr_chunk_decoder_.set_doc_id(i, prev_doc_id);
+        }
+      }
+
+      // We always start the chunk offset from the last returned (or first, if this is a newly decoded chunk) document.
+      int curr_document_offset = curr_chunk_decoder_.curr_document_offset();
+      for (int i = curr_document_offset; i < curr_chunk_decoder_.num_docs(); ++i) {
+          uint32_t curr_doc_id = curr_chunk_decoder_.doc_id(i);
+          cout << "doc_id: " << curr_doc_id << endl;
+      }
+#endif
+
+      AdvanceChunk();
+    } else {
+      // We're moving on to process the next block. This block is of no use to us anymore.
+      AdvanceBlock();
+    }
+  }
+
+  // No other blocks in this list have a score > 'min_score', so return this sentinel value to indicate this.
+  return kNoMoreDocs;
+}
+
+float ListData::GetBlockScoreBound() {
+  assert(external_index_reader_ != NULL);
+  return curr_block_decoder_.block_max_score();
+}
+
+float ListData::GetChunkScoreBound() {
+  assert(external_index_reader_ != NULL);
+  return curr_chunk_decoder_.chunk_max_score();
 }
 
 void ListData::SkipBlocks(int num_blocks, uint32_t initial_chunk_num) {
@@ -339,7 +689,8 @@ void ListData::SkipBlocks(int num_blocks, uint32_t initial_chunk_num) {
       cached_bytes_read_ += cached_blocks_read * CacheManager::kBlockSize;
     }
 
-    curr_block_decoder_.InitBlock(curr_block_num_, initial_chunk_num, cache_manager_.GetBlock(curr_block_num_));
+    curr_block_decoder_.InitBlock(block_header_decompressor_, initial_chunk_num, cache_manager_.GetBlock(curr_block_num_));
+    curr_chunk_decoder_.set_decoded_doc_ids(false);
 
     if (external_index_reader_ != NULL) {
       // Advance the external index pointer up to the block we need and decode it.
@@ -354,9 +705,9 @@ void ListData::SkipBlocks(int num_blocks, uint32_t initial_chunk_num) {
 void ListData::AdvanceBlock() {
   // If list is across blocks, need to get offset from previous block, to be used when decoding docID gaps.
   if (last_doc_ids_ != NULL) {
-    set_prev_block_last_doc_id(curr_block_last_doc_id());
+    prev_block_last_doc_id_ = last_doc_ids_[curr_block_idx_];
   } else {
-    set_prev_block_last_doc_id(curr_block_decoder_.chunk_last_doc_id(curr_block_decoder_.num_chunks() - 1));
+    prev_block_last_doc_id_ = curr_block_decoder_.chunk_last_doc_id(curr_block_decoder_.num_chunks() - 1);
   }
 
   SkipBlocks(1, 0);
@@ -374,7 +725,8 @@ void ListData::AdvanceBlock(uint32_t doc_id) {
   }
 }
 
-// TODO: We can also bias this binary search towards the lower half of the array, since that's where we expect our search to end (you can divide by 4, for example).
+// TODO: We can also bias this binary search towards the lower half of the array,
+//       since that's where we expect our search to end (you can divide by 4, for example).
 //       We always expect to go forward into the inverted list, so this seems like a reasonable optimization.
 void ListData::BlockBinarySearch(uint32_t doc_id) {
   assert(last_doc_ids_ != NULL);
@@ -402,9 +754,15 @@ void ListData::BlockSequentialSearch(uint32_t doc_id) {
     // We do this only if the docID we're looking for could potentially be in the block.
     if (doc_id <= last_doc_ids_[i]) {
       SkipToBlock(i);
-      break;
+      return;
     }
   }
+
+  // If we reach this point, it means that we can skip all the remaining blocks in the list.
+  // Since we won't be initializing any block, we have to cause the has_more() function to return false.
+  // Note that BlockBinarySearch() does not have this problem, as it will always skip to (and decode) the last block in the list.
+  num_blocks_left_ = 1;
+  num_chunks_last_block_left_ = 0;
 }
 
 // Helper method for the BlockSequentialSearch() and BlockBinarySearch() methods.
@@ -415,7 +773,7 @@ void ListData::SkipToBlock(uint32_t skip_to_block_idx) {
     // Only need to skip to the block when we have blocks to skip (otherwise, we'd be reseting the current block state).
     int num_blocks = skip_to_block_idx - curr_block_idx_;
     if (num_blocks > 0) {
-      set_prev_block_last_doc_id(last_doc_ids_[skip_to_block_idx - 1]);
+      prev_block_last_doc_id_ = last_doc_ids_[skip_to_block_idx - 1];
       SkipBlocks(num_blocks, 0);
       // We don't count moving on to the next block as skipping a block.
       if (num_blocks > 1) {
@@ -434,22 +792,14 @@ void ListData::SkipToBlock(uint32_t skip_to_block_idx) {
 void ListData::AdvanceChunk() {
   // Set the current chunk in the block so the pointer to the next chunk is correctly offset in the block data.
   curr_block_decoder_.advance_curr_chunk();
-  curr_block_decoder_.curr_chunk_decoder()->set_decoded(false);
+  curr_chunk_decoder_.set_decoded_doc_ids(false);
 
   // Can update the number of documents left to process after processing the complete chunk.
-  update_num_docs_left();
+  num_docs_left_ -= ChunkDecoder::kChunkSize;
 
   // Adjust the number of chunks in the last block (only if we're in the last block).
   if (final_block()) {
     num_chunks_last_block_left_ -= 1;
-  }
-
-  if (external_index_reader_ != NULL) {
-    // Advance the external index pointer to the next chunk.
-    external_index_reader_->AdvanceChunk(&external_index_pointer_);
-
-    // Set the max score of the chunk, which we get from the external index.
-    curr_block_decoder_.curr_chunk_decoder()->set_chunk_max_score(external_index_pointer_.chunk_max_score);
   }
 }
 
@@ -734,10 +1084,9 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
  * Initiates loading of several MBs worth of blocks ahead since we don't know exactly how many blocks are in the list. Each block is processed as soon as it's
  * needed and we know it has been loaded into memory.
  **************************************************************************************************************************************************************/
-IndexReader::IndexReader(Purpose purpose, DocumentOrder document_order, CacheManager& cache_manager, const char* lexicon_filename,
-                         const char* doc_map_filename, const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader) :
+IndexReader::IndexReader(Purpose purpose, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
+                         const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader) :
   purpose_(purpose),
-  document_order_(document_order),
   kLexiconSize(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kLexiconSize))),
   lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)),
   document_map_("index.dmap"/*doc_map_filename*/),  // TODO: Use passed in filename.
@@ -783,7 +1132,12 @@ ListData* IndexReader::OpenList(const LexiconData& lex_data, int layer_num, bool
     }
   }
 
-  ListData* list_data = new ListData(layer_num,
+  ListData* list_data = new ListData(cache_manager_,
+                                     doc_id_decompressor_,
+                                     frequency_decompressor_,
+                                     position_decompressor_,
+                                     block_header_decompressor_,
+                                     layer_num,
                                      lex_data.layer_block_number(layer_num),
                                      lex_data.layer_chunk_number(layer_num),
                                      lex_data.layer_num_docs(layer_num),
@@ -792,14 +1146,11 @@ ListData* IndexReader::OpenList(const LexiconData& lex_data, int layer_num, bool
                                      lex_data.layer_num_blocks(layer_num),
                                      lex_data.layer_last_doc_ids(layer_num),
                                      lex_data.layer_score_threshold(layer_num),
-                                     cache_manager_,
-                                     doc_id_decompressor_,
-                                     frequency_decompressor_,
-                                     position_decompressor_,
-                                     block_header_decompressor_,
                                      lex_data.layer_external_index_offset(layer_num),
                                      external_index_reader_,
-                                     single_term_query);
+                                     use_positions_,
+                                     single_term_query,
+                                     block_skipping_enabled_);
   return list_data;
 }
 
@@ -816,318 +1167,6 @@ void IndexReader::CloseList(ListData* list_data) {
   total_num_blocks_skipped_ += list_data->num_blocks_skipped();
 
   delete list_data;
-}
-
-// TODO: Some potential improvements:
-// * For single word and OR type queries, we don't need to decode the block header, since we won't be doing any chunk skipping. This requires storing the size of
-//   the block header (in number of ints) so we can skip past it. We'd also need to decompress the entire chunk (even positions if there are any)
-//   in order to get the complete chunk size before moving on to the next chunk, or otherwise we wouldn't know where the next chunk would start.
-// * Can calculate the inclusive prefix sum of all the chunk sizes while building the block header; then won't have to add them while doing chunk skipping.
-// * Keep in mind cache line size: 64 bytes (16 4-byte integers) on Core 2 and later (32 bytes is more portable though).
-//inline uint32_t __attribute__((always_inline)) IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
-uint32_t IndexReader::NextGEQ(ListData* list_data, uint32_t doc_id) {
-  assert(list_data != NULL);
-
-  // For standard DAAT OR mode processing, setting this parameter to 'false' resulted in an improvement of a few milliseconds in terms of average query latency,
-  // which was a little surprising.
-  const bool kDecodeAllChunkDGaps = false;
-
-  // Since we now have the capability to skip over multiple blocks without even decoding the block header,
-  // we can't tell how many documents or chunks are left in the list. For this reason, we now count the number of blocks remaining to be processed
-  // in the list as well as how many chunks are present in the last remaining block of the list.
-  // Additionally, we have to determine the number of chunks present in the last chunk of a list through the total number
-  // of documents present in the list.
-
-  // In-memory block level index has been built, so we can do block skipping.
-  if (block_skipping_enabled_) {
-    // TODO: Can you mix the binary search and sequential search for skipping blocks to optimize performance?
-    list_data->AdvanceBlock(doc_id);
-  }
-
-  ChunkDecoder::ChunkProperties chunk_properties;
-  chunk_properties.includes_contexts = includes_contexts_;
-  chunk_properties.includes_positions = includes_positions_;
-
-  BlockDecoder* block;
-  ChunkDecoder* chunk;
-  int i;
-  int num_chunk_docs;
-  int curr_chunk_num;
-  int curr_document_offset;
-  uint32_t curr_doc_id;
-
-  while (list_data->has_more()) {
-    block = list_data->curr_block_decoder();
-
-    curr_chunk_num = block->curr_chunk();
-    if (curr_chunk_num < block->num_chunks()) {
-      // Decide whether or not we can skip past this chunk by checking the current docID we're looking for against the last docID of this chunk.
-      if (doc_id <= block->chunk_last_doc_id(curr_chunk_num)) {  // We cannot skip past this chunk.
-        chunk = block->curr_chunk_decoder();
-
-        // Check if we previously decoded this chunk.
-        if (block->curr_chunk_decoded() == false) {  // We have to decode this chunk.
-          // TODO: If we know there are no block skips possible (it's a single term query, unoptimized OR query, etc)
-          //       We can keep track of the number of documents left instead to save on some branchy code.
-          //       Note that when doing block skips, we cannot keep track of the number of documents left since we don't know
-          //       the number of documents for a particular list in a block.
-          //       This information can now be easily stored in the external index.
-          //       Would be interesting to make use of it to try to make NextGEQ() less branchy.
-          // num_chunk_docs = min(ChunkDecoder::kChunkSize, list_data->num_docs_left());
-          num_chunk_docs = ((list_data->final_block() && list_data->final_chunk()) ? list_data->num_docs_last_chunk() : ChunkDecoder::kChunkSize);
-          chunk->InitChunk(chunk_properties, block->curr_block_data(), num_chunk_docs);
-          chunk->DecodeDocIds();
-
-          // Need to do these offsets only if we haven't done them before for this chunk. This is to handle d-gap coding.
-          // List is across blocks and we need offset from previous block.
-          if (!list_data->initial_block() && curr_chunk_num == 0) {
-            chunk->update_prev_decoded_doc_id(list_data->prev_block_last_doc_id());
-          }
-
-          // We need offset from previous chunk if this is not the first chunk in the list.
-          if (curr_chunk_num > block->starting_chunk()) {
-            chunk->update_prev_decoded_doc_id(block->chunk_last_doc_id(curr_chunk_num - 1));
-          }
-
-          // We always decode the first d-gap in the chunk.
-          chunk->update_prev_decoded_doc_id(chunk->doc_id(0));
-
-          if (kDecodeAllChunkDGaps) {
-            // Can decode all d-gaps in one swoop.
-            uint32_t prev_doc_id = chunk->prev_decoded_doc_id();
-            chunk->set_doc_id(0, prev_doc_id);
-            for (i = 1; i < chunk->num_docs(); ++i) {
-              prev_doc_id += chunk->doc_id(i);
-              chunk->set_doc_id(i, prev_doc_id);
-            }
-          }
-        }
-
-        if (!kDecodeAllChunkDGaps) {
-          curr_doc_id = chunk->prev_decoded_doc_id();
-        }
-
-        // We always start the chunk offset from the last returned (or first, if this is a newly decoded chunk) document.
-        curr_document_offset = chunk->curr_document_offset();
-        for (i = curr_document_offset; i < chunk->num_docs(); ++i) {
-          if (kDecodeAllChunkDGaps) {
-            curr_doc_id = chunk->doc_id(i);
-          } else {
-            if (i != curr_document_offset)
-              curr_doc_id += chunk->doc_id(i);  // Necessary for d-gap coding.
-          }
-
-          // Found the docID we're looking for.
-          if (curr_doc_id >= doc_id) {
-            chunk->set_curr_document_offset(i);  // Offset for the frequency.
-            if (!kDecodeAllChunkDGaps) {
-              chunk->set_prev_decoded_doc_id(curr_doc_id);
-            }
-            return curr_doc_id;
-          }
-        }
-      }
-
-      list_data->AdvanceChunk();
-    } else {
-      // We're moving on to process the next block. This block is of no use to us anymore.
-      list_data->AdvanceBlock();
-    }
-  }
-
-  // No other chunks in this list have a docID >= 'doc_id', so return this sentinel value to indicate this.
-  return std::numeric_limits<uint32_t>::max();
-}
-
-// Returns the upperbound score of the current block.
-float IndexReader::GetBlockScoreBound(ListData* list_data) {
-  assert(list_data != NULL);
-  BlockDecoder* block = list_data->curr_block_decoder();
-  assert(block != NULL);
-  return block->block_max_score();
-}
-
-// Returns the upperbound score of the current chunk.
-float IndexReader::GetChunkScoreBound(ListData* list_data) {
-  assert(list_data != NULL);
-  BlockDecoder* block = list_data->curr_block_decoder();
-  assert(block != NULL);
-  ChunkDecoder* chunk = block->curr_chunk_decoder();
-  assert(chunk != NULL);
-  return chunk->chunk_max_score();
-}
-
-// Returns the next docID that has a score greater than 'min_score'.
-uint32_t IndexReader::NextGreaterScore(ListData* list_data, float min_score) {
-  while (list_data->has_more()) {
-    if (list_data->curr_block_decoder()->block_max_score() <= min_score) {
-//      return NextGEQ(list_data, 0);
-
-      list_data->AdvanceBlock();
-      cout << "Skipping block!" << endl;//TODO
-    } else {
-//      cout << "No block skipping!" << endl;//TODO
-      return NextGEQ(list_data, 0);
-    }
-  }
-
-  // No other blocks in this list have a score > 'min_score', so return this sentinel value to indicate this.
-  return std::numeric_limits<uint32_t>::max();
-}
-
-uint32_t IndexReader::GetFreq(ListData* list_data, uint32_t doc_id) {
-  assert(list_data != NULL);
-  ChunkDecoder* chunk = list_data->curr_block_decoder()->curr_chunk_decoder();
-  assert(chunk != NULL);
-  // Decode the frequencies and positions if we haven't already.
-  if (!chunk->decoded_properties()) {
-    chunk->DecodeProperties();
-  }
-
-  if (use_positions_) {
-    // Need to set the correct offset for the positions and other frequency dependent properties.
-    chunk->UpdatePropertiesOffset();
-  }
-
-  return chunk->current_frequency();
-}
-
-int IndexReader::GetList(ListData* list_data, IndexDataType data_type, uint32_t* index_data, int index_data_size) {
-  assert(list_data != NULL);
-
-  int curr_index_data_idx = 0;
-  uint32_t next_doc_id = 0;
-
-  uint32_t curr_doc_id;
-  uint32_t curr_frequency;
-  const uint32_t* curr_positions;
-
-  // Necessary for positions. If we have started decoding the list (on the previous call to this function)
-  // but stopped because we couldn't copy all the positions, copy them now.
-  if (data_type == kPosition && list_data->curr_block_decoder()->curr_chunk_decoder()->decoded()) {
-    curr_frequency = GetFreq(list_data, 0);  // Getting the frequency for docID 0 will actually return the frequency for the last decoded docID in the chunk.
-    curr_positions = list_data->curr_block_decoder()->curr_chunk_decoder()->current_positions();
-    if (static_cast<int> (curr_frequency) <= index_data_size) {
-      // Copy the positions.
-      for (size_t i = 0; i < curr_frequency; ++i) {
-        index_data[curr_index_data_idx++] = curr_positions[i];
-      }
-    } else {
-      return -1;  // Indicates the array needs to be larger to retrieve the positions.
-    }
-  }
-
-  while (curr_index_data_idx < index_data_size && (curr_doc_id = NextGEQ(list_data, next_doc_id)) < numeric_limits<uint32_t>::max()) {
-    next_doc_id = curr_doc_id + 1;
-
-    bool continue_next = false;
-
-    switch (data_type) {
-      case kDocId:
-        // Copy the docID.
-        index_data[curr_index_data_idx++] = curr_doc_id;
-        break;
-
-      case kFrequency:
-        // Copy the frequency.
-        index_data[curr_index_data_idx++] = GetFreq(list_data, curr_doc_id);
-        break;
-
-      case kPosition:
-        curr_frequency = GetFreq(list_data, curr_doc_id);
-        curr_positions = list_data->curr_block_decoder()->curr_chunk_decoder()->current_positions();
-
-        // We need to make sure we don't consume positions unless *all* of them fit into the supplied array.
-        if (static_cast<int> (curr_index_data_idx + curr_frequency) <= index_data_size) {
-          // Copy the positions.
-          for (size_t i = 0; i < curr_frequency; ++i) {
-            index_data[curr_index_data_idx++] = curr_positions[i];
-          }
-        } else {
-          // If this is the position data for the first document that doesn't fit into the supplied array,
-          // need to indicate for the user that the supplied array needs to be larger (instead of misleadingly returning 0).
-          if (curr_index_data_idx == 0) {
-            return -1;
-          }
-          continue_next = true;
-        }
-        break;
-
-      default:
-        assert(false);
-    }
-
-    if (continue_next) {
-      break;
-    }
-  }
-
-  // Returns the number of data items decoded and stored into the supplied array.
-  // No more data left to consume after we return 0.
-  return curr_index_data_idx;
-}
-
-int IndexReader::LoopOverList(ListData* list_data, IndexDataType data_type) {
-  assert(list_data != NULL);
-
-  ChunkDecoder::ChunkProperties chunk_properties;
-  chunk_properties.includes_contexts = includes_contexts_;
-  chunk_properties.includes_positions = includes_positions_;
-
-  int k;
-  BlockDecoder* block;
-  ChunkDecoder* chunk;
-  uint32_t curr_frequency;
-
-  int count = 0;
-
-  // We can use the number of documents left in a list to see if we finished traversing the list
-  // because we'll never be doing any block skipping (we're only traversing a single list).
-  while (list_data->num_docs_left() > 0) {
-    block = list_data->curr_block_decoder();
-
-    if (block->curr_chunk() < block->num_chunks()) {
-      chunk = block->curr_chunk_decoder();
-      // Create a new chunk and add it to the block.
-      chunk->InitChunk(chunk_properties, block->curr_block_data(), std::min(ChunkDecoder::kChunkSize, list_data->num_docs_left()));
-      chunk->DecodeDocIds();
-
-      for (k = 0; k < chunk->num_docs(); ++k) {
-        switch (data_type) {
-          case kDocId:
-            chunk->doc_id(k);
-            ++count;
-            break;
-
-          case kFrequency:
-            chunk->set_curr_document_offset(k);  // Offset for the frequency.
-            curr_frequency = GetFreq(list_data, 0);
-            ++count;
-            break;
-
-          case kPosition:
-            chunk->set_curr_document_offset(k);  // Offset for the frequency.
-            curr_frequency = GetFreq(list_data, 0);
-            list_data->curr_block_decoder()->curr_chunk_decoder()->current_positions();
-            count += curr_frequency;
-            break;
-
-          default:
-            assert(false);
-        }
-      }
-
-      // Moving on to the next chunk.
-      block->advance_curr_chunk();
-      // Can update the number of documents left to process after processing the complete chunk.
-      list_data->update_num_docs_left();
-    } else {
-      // We're moving on to process the next block. This block is of no use to us anymore.
-      list_data->AdvanceBlock();
-    }
-  }
-
-  return count;
 }
 
 int IndexReader::GetDocLen(uint32_t doc_id) {
