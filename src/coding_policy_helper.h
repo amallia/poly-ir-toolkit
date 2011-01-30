@@ -51,7 +51,7 @@ namespace coding_policy_helper {
 // this is because there is a case where a word will have a max of 28 integers compressed within, and we will access the output buffer
 // for all the 28 integers, even if some of those 28 integers are garbage which we haven't really compressed (but this was the case used to encode them).
 // So we need to round the number of compressed integers to a multiple of 28 and make sure there is at least 28 extra space at the end of the array
-// to ensure there is ample room for decompression. Here, we just use 32 instead of 28 for convenience.
+// to ensure there is ample room for decompression. Here, we just use 32 instead of 28 for convenience, though it produces a slightly larger upperbound.
 #define UncompressedOutBufferUpperbound(buffer_size) ((((buffer_size) >> 5) + 2) << 5)
 
 // Determines size of output buffer for compression.
