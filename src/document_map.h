@@ -26,22 +26,8 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-//
-/*
- * TODO: Index reorganization idea:
- *
- * Store all the block headers together at the front of the list.
- * We can also create a "layered" skipping method by indexing the block headers.
- * This way, we can first check the block header index, and skip ahead to the correct block header.
- * We then decompress the block header and find the proper chunk we need to get.
- *
- * Another idea to eliminate the "wasted space" at the end of each block. This means that a chunk can span block headers (assuming it can span a maximum of 2 blocks only).
- * Since we know the size of each chunk (stored in the block header), when we start decompressing a chunk, we know if it'll spill over to the next block.
- * The PROBLEM with these scheme is that when a chunk spans across a block, we need to get the complete chunk data in a single array. However, our caching scheme (LRU) prevents this
- * because consecutive blocks are not guaranteed to be placed consecutively in the cache (although it is likely they are). When using this caching scheme, we'd have to check whether
- * the blocks that the chunk spans are consecutively placed, and if not we need to copy the chunk data into a new array and use it as input to the compression function.
- * Note that this does not affect us when the index is completely in main memory, since the blocks are always consecutively placed in main memory.
- */
+// Assumptions:
+// Document reordering will only take place once we have a complete index ready. We will not be doing document reordering while indexing.
 //
 // TODO:
 // Have methods for storing fixed length and variable length info.
@@ -136,34 +122,6 @@ struct DocMapEntry {
 };
 
 /**************************************************************************************************************************************************************
- * DocumentMapReader
- *
- * This class reads the complete document map into an in memory buffer for fast access.
- **************************************************************************************************************************************************************/
-class DocumentMapReader {
-public:
-  DocumentMapReader(const char* document_map_filename);
-  ~DocumentMapReader();
-
-  int size() const {
-    return doc_map_buffer_size_;
-  }
-
-  int DocMapSize();
-
-  int GetDocumentLen(uint32_t doc_id) const {
-    return doc_map_buffer_[doc_id].doc_len;
-  }
-
-private:
-  int doc_map_fd_;
-  int doc_map_buffer_size_;
-  DocMapEntry* doc_map_buffer_;
-};
-
-
-
-/**************************************************************************************************************************************************************
  * DocumentMapWriter
  *
  * This class buffers a portion of the document map before appending it to the document map file.
@@ -193,6 +151,32 @@ private:
   int doc_map_fd_urls_; // TODO might wanna make constant
   char* urls_buffer_;
   int urls_buffer_len_;
+};
+
+/**************************************************************************************************************************************************************
+ * DocumentMapReader
+ *
+ * This class reads the complete document map into an in memory buffer for fast access.
+ **************************************************************************************************************************************************************/
+class DocumentMapReader {
+public:
+  DocumentMapReader(const char* document_map_filename);
+  ~DocumentMapReader();
+
+  int size() const {
+    return doc_map_buffer_size_;
+  }
+
+  int DocMapSize();
+
+  int GetDocumentLen(uint32_t doc_id) const {
+    return doc_map_buffer_[doc_id].doc_len;
+  }
+
+private:
+  int doc_map_fd_;
+  int doc_map_buffer_size_;
+  DocMapEntry* doc_map_buffer_;
 };
 
 #endif /* DOCUMENT_MAP_H_ */

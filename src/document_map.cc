@@ -43,36 +43,6 @@
 using namespace std;
 
 /**************************************************************************************************************************************************************
- * DocumentMapReader
- *
- **************************************************************************************************************************************************************/
-DocumentMapReader::DocumentMapReader(const char* document_map_filename) :
-  doc_map_fd_(open(document_map_filename, O_RDONLY)), doc_map_buffer_size_(DocMapSize()),
-  doc_map_buffer_(new DocMapEntry[doc_map_buffer_size_]) {
-  int read_ret = read(doc_map_fd_, doc_map_buffer_, doc_map_buffer_size_ * sizeof(*doc_map_buffer_));
-  if (read_ret == -1)
-    assert(false);
-}
-
-DocumentMapReader::~DocumentMapReader() {
-  delete[] doc_map_buffer_;
-  close(doc_map_fd_);
-}
-
-int DocumentMapReader::DocMapSize() {
-  struct stat stat_buf;
-  if (fstat(doc_map_fd_, &stat_buf) < 0) {
-    GetErrorLogger().LogErrno("fstat() in DocumentMapReader::DocMapSize()", errno, true);
-  }
-
-//  cout << "stat_buf.st_size: " << stat_buf.st_size << endl;
-//  cout << "sizeof(*doc_map_buffer_): " << sizeof(*doc_map_buffer_) << endl;
-
-  assert(stat_buf.st_size % sizeof(*doc_map_buffer_) == 0);
-  return stat_buf.st_size / sizeof(*doc_map_buffer_);
-}
-
-/**************************************************************************************************************************************************************
  * DocumentMapWriter
  *
  **************************************************************************************************************************************************************/
@@ -133,4 +103,34 @@ void DocumentMapWriter::DumpBufferUrls() {
   if(write_ret < 0) {
     GetErrorLogger().Log("write() oops", true);
   }
+}
+
+/**************************************************************************************************************************************************************
+ * DocumentMapReader
+ *
+ **************************************************************************************************************************************************************/
+DocumentMapReader::DocumentMapReader(const char* document_map_filename) :
+  doc_map_fd_(open(document_map_filename, O_RDONLY)), doc_map_buffer_size_(DocMapSize()),
+  doc_map_buffer_(new DocMapEntry[doc_map_buffer_size_]) {
+  int read_ret = read(doc_map_fd_, doc_map_buffer_, doc_map_buffer_size_ * sizeof(*doc_map_buffer_));
+  if (read_ret == -1)
+    assert(false);
+}
+
+DocumentMapReader::~DocumentMapReader() {
+  delete[] doc_map_buffer_;
+  close(doc_map_fd_);
+}
+
+int DocumentMapReader::DocMapSize() {
+  struct stat stat_buf;
+  if (fstat(doc_map_fd_, &stat_buf) < 0) {
+    GetErrorLogger().LogErrno("fstat() in DocumentMapReader::DocMapSize()", errno, true);
+  }
+
+//  cout << "stat_buf.st_size: " << stat_buf.st_size << endl;
+//  cout << "sizeof(*doc_map_buffer_): " << sizeof(*doc_map_buffer_) << endl;
+
+  assert(stat_buf.st_size % sizeof(*doc_map_buffer_) == 0);
+  return stat_buf.st_size / sizeof(*doc_map_buffer_);
 }
