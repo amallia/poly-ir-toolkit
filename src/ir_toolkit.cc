@@ -773,7 +773,9 @@ void FloatingPointTest() {
   float sum2 = c + b + a;
   float sum3 = b + c + a;
 
-  assert(sum1 == sum2 && sum1 == sum3 && sum2 == sum3);
+  if (sum1 != sum2 || sum1 != sum3 || sum2 != sum3) {
+    assert(false);
+  }
 }
 
 void SimdTest() {

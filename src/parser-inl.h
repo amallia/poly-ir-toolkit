@@ -90,7 +90,9 @@ template<class Callback>
         ++doc_id;
         ++num_docs_parsed;
 
-        assert(curr_p - content_start == warc_header.content_length);
+        if ((curr_p - content_start) != warc_header.content_length) {
+          assert(false);
+        }
       }
     } else {
       num_docs_parsed += ParseBuffer(buf, buf_len, doc_id, avg_doc_length, curr_p);
