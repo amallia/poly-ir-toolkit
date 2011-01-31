@@ -83,7 +83,7 @@ LayeredIndexGenerator::LayeredIndexGenerator(const IndexFiles& input_index_files
   index_posting_count_(0),
   first_doc_id_in_index_(0),
   last_doc_id_in_index_(0) {
-  external_index_builder_ = new ExternalIndexBuilder("index.ext");
+  external_index_builder_ = new ExternalIndexBuilder(output_index_files_.external_index_filename().c_str());
   index_builder_ = new IndexBuilder(output_index_files_.lexicon_filename().c_str(), output_index_files_.index_filename().c_str(), block_header_compressor_,
                                     external_index_builder_);
 

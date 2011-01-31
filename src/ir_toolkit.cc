@@ -120,10 +120,12 @@ struct CommandLineArgs {
     lexicon1_filename("index.lex"),
     doc_map1_filename("index.dmap"),
     meta_info1_filename("index.meta"),
+    external_index1_filename("index.ext"),
     index2_filename("index.idx"),
     lexicon2_filename("index.lex"),
     doc_map2_filename("index.dmap"),
     meta_info2_filename("index.meta"),
+    external_index2_filename("index.ext"),
     merge_degree(0),
     term(NULL),
     term_len(0),
@@ -150,11 +152,13 @@ struct CommandLineArgs {
   const char* lexicon1_filename;
   const char* doc_map1_filename;
   const char* meta_info1_filename;
+  const char* external_index1_filename;
 
   const char* index2_filename;
   const char* lexicon2_filename;
   const char* doc_map2_filename;
   const char* meta_info2_filename;
+  const char* external_index2_filename;
 
   int merge_degree;
 
@@ -225,13 +229,13 @@ void Init() {
 }
 
 void Query(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-           const char* stop_words_list_filename, QueryProcessor::QueryAlgorithm query_algorithm, QueryProcessor::QueryMode query_mode,
-           QueryProcessor::ResultFormat result_format) {
+           const char* external_index_filename, const char* stop_words_list_filename, QueryProcessor::QueryAlgorithm query_algorithm,
+           QueryProcessor::QueryMode query_mode, QueryProcessor::ResultFormat result_format) {
   GetDefaultLogger().Log("Starting query processor with index file '" + Stringify(index_filename) + "', " + "lexicon file '" + Stringify(lexicon_filename)
       + "', " + "document map file '" + Stringify(doc_map_filename) + "', and " + "meta file '" + Stringify(meta_info_filename) + "'.", false);
 
-  QueryProcessor query_processor(index_filename, lexicon_filename, doc_map_filename, meta_info_filename, stop_words_list_filename, query_algorithm, query_mode,
-                                 result_format);
+  QueryProcessor query_processor(index_filename, lexicon_filename, doc_map_filename, meta_info_filename, external_index_filename, stop_words_list_filename,
+                                 query_algorithm, query_mode, result_format);
 }
 
 void IndexCollection() {
@@ -969,43 +973,68 @@ int main(int argc, char** argv) {
   char** input_files = argv + optind;
   int num_input_files = argc - optind;
 
-  if (command_line_args.mode == CommandLineArgs::kQuery ||
-      command_line_args.mode == CommandLineArgs::kCat ||
-      command_line_args.mode == CommandLineArgs::kDiff ||
-      command_line_args.mode == CommandLineArgs::kRetrieveIndexData ||
-      command_line_args.mode == CommandLineArgs::kLoopOverIndexData ||
-      command_line_args.mode == CommandLineArgs::kLayerify ||
-      command_line_args.mode == CommandLineArgs::kRemap) {
-    for (int i = 0; i < num_input_files; ++i) {
-      switch (i) {
-        // Index files for the first index.
-        case 0:
-          command_line_args.index1_filename = input_files[i];
-          break;
-        case 1:
-          command_line_args.lexicon1_filename = input_files[i];
-          break;
-        case 2:
-          command_line_args.doc_map1_filename = input_files[i];
-          break;
-        case 3:
-          command_line_args.meta_info1_filename = input_files[i];
-          break;
-        // Index files for the seconds index (if any).
-        case 4:
-          command_line_args.index2_filename = input_files[i];
-          break;
-        case 5:
-          command_line_args.lexicon2_filename = input_files[i];
-          break;
-        case 6:
-          command_line_args.doc_map2_filename = input_files[i];
-          break;
-        case 7:
-          command_line_args.meta_info2_filename = input_files[i];
-          break;
+  switch (command_line_args.mode) {
+    case CommandLineArgs::kQuery:
+      for (int i = 0; i < num_input_files; ++i) {
+        switch (i) {
+          case 0:
+            command_line_args.index1_filename = input_files[i];
+            break;
+          case 1:
+            command_line_args.lexicon1_filename = input_files[i];
+            break;
+          case 2:
+            command_line_args.doc_map1_filename = input_files[i];
+            break;
+          case 3:
+            command_line_args.meta_info1_filename = input_files[i];
+            break;
+          case 4:
+            command_line_args.external_index1_filename = input_files[i];
+            break;
+        }
       }
-    }
+      break;
+
+    case CommandLineArgs::kCat:
+    case CommandLineArgs::kDiff:
+    case CommandLineArgs::kRetrieveIndexData:
+    case CommandLineArgs::kLoopOverIndexData:
+    case CommandLineArgs::kLayerify:
+    case CommandLineArgs::kRemap:
+      for (int i = 0; i < num_input_files; ++i) {
+        switch (i) {
+          // Index files for the first index.
+          case 0:
+            command_line_args.index1_filename = input_files[i];
+            break;
+          case 1:
+            command_line_args.lexicon1_filename = input_files[i];
+            break;
+          case 2:
+            command_line_args.doc_map1_filename = input_files[i];
+            break;
+          case 3:
+            command_line_args.meta_info1_filename = input_files[i];
+            break;
+          // Index files for the seconds index (if any).
+          case 4:
+            command_line_args.index2_filename = input_files[i];
+            break;
+          case 5:
+            command_line_args.lexicon2_filename = input_files[i];
+            break;
+          case 6:
+            command_line_args.doc_map2_filename = input_files[i];
+            break;
+          case 7:
+            command_line_args.meta_info2_filename = input_files[i];
+            break;
+        }
+      }
+      break;
+    default:
+      assert(false);
   }
 
   Init();
@@ -1017,7 +1046,8 @@ int main(int argc, char** argv) {
       break;
     case CommandLineArgs::kQuery:
       Query(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-            command_line_args.query_stop_words_list_file, command_line_args.query_algorithm, command_line_args.query_mode, command_line_args.result_format);
+            command_line_args.external_index1_filename, command_line_args.query_stop_words_list_file, command_line_args.query_algorithm,
+            command_line_args.query_mode, command_line_args.result_format);
       break;
     case CommandLineArgs::kMergeInitial:
       MergeInitial(command_line_args.merge_degree);

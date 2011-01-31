@@ -98,7 +98,8 @@ public:
   };
 
   QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                 const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode, ResultFormat result_format);
+                 const char* external_index_filename, const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode,
+                 ResultFormat result_format);
   ~QueryProcessor();
 
   void LoadStopWordsList(const char* stop_words_list_filename);
@@ -137,7 +138,7 @@ public:
   void PrintQueryingParameters();
 
 private:
-  const ExternalIndexReader* GetExternalIndexReader(QueryAlgorithm query_algorithm) const;
+  const ExternalIndexReader* GetExternalIndexReader(QueryAlgorithm query_algorithm, const char* external_index_filename) const;
 
   QueryAlgorithm query_algorithm_;  // The query algorithm to use. This is also dependent on the type of index we're using.
   QueryMode query_mode_;            // The way we'll be accepting queries.

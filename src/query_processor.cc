@@ -56,7 +56,8 @@ using namespace std;
  *
  **************************************************************************************************************************************************************/
 QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                               const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode, ResultFormat result_format) :
+                               const char* external_index_filename, const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode,
+                               ResultFormat result_format) :
   query_algorithm_(query_algorithm),
   query_mode_(query_mode),
   result_format_(result_format),
@@ -66,7 +67,7 @@ QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_f
   use_positions_(Configuration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kUsePositions))),
   collection_average_doc_len_(0),
   collection_total_num_docs_(0),
-  external_index_reader_(GetExternalIndexReader(query_algorithm_)),
+  external_index_reader_(GetExternalIndexReader(query_algorithm_, external_index_filename)),
   cache_policy_(((Configuration::GetConfiguration().GetValue(config_properties::kMemoryMappedIndex) == "true") ?
                   static_cast<CacheManager*> (new MemoryMappedCachePolicy(index_filename)) :
                   (Configuration::GetConfiguration().GetValue(config_properties::kMemoryResidentIndex) == "true") ?
@@ -1862,7 +1863,7 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
 
     // When 'true', enables the use of embedded list score information to provide further efficiency gains
     // through better list skipping and less scoring computations.
-    const bool kScoreSkipping = true;
+    const bool kScoreSkipping = false;
 
     // Defines the score skipping mode to use.
     // '0' means use block score upperbounds.
@@ -2708,11 +2709,11 @@ void QueryProcessor::PrintQueryingParameters() {
   cout << endl;
 }
 
-const ExternalIndexReader* QueryProcessor::GetExternalIndexReader(QueryAlgorithm query_algorithm) const {
+const ExternalIndexReader* QueryProcessor::GetExternalIndexReader(QueryAlgorithm query_algorithm, const char* external_index_filename) const {
   switch (query_algorithm) {
     case kMaxScore:
     case kDualLayeredMaxScore:
-      return new ExternalIndexReader("index.ext");
+      return new ExternalIndexReader(external_index_filename);
     default:
       return NULL;
   }
