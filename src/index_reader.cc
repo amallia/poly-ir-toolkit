@@ -1089,7 +1089,7 @@ IndexReader::IndexReader(Purpose purpose, CacheManager& cache_manager, const cha
   purpose_(purpose),
   kLexiconSize(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kLexiconSize))),
   lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)),
-  document_map_("index.dmap"/*doc_map_filename*/),  // TODO: Use passed in filename.
+  document_map_("index.dmap_basic", "index.dmap_extended"),
   cache_manager_(cache_manager),
   meta_info_(meta_info_filename),
   includes_contexts_(IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesContexts), true)),
@@ -1167,13 +1167,4 @@ void IndexReader::CloseList(ListData* list_data) {
   total_num_blocks_skipped_ += list_data->num_blocks_skipped();
 
   delete list_data;
-}
-
-int IndexReader::GetDocLen(uint32_t doc_id) {
-  return document_map_.GetDocumentLen(doc_id);
-}
-
-const char* IndexReader::GetDocUrl(uint32_t doc_id) {
-  // TODO: Get value from doc map.
-  return "url";
 }

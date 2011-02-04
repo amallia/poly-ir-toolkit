@@ -692,9 +692,6 @@ public:
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query, int term_num);
   void CloseList(ListData* list_data);
 
-  int GetDocLen(uint32_t doc_id);
-  const char* GetDocUrl(uint32_t doc_id);
-
   Lexicon& lexicon() {
     return lexicon_;
   }
