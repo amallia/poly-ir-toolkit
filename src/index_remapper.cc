@@ -108,7 +108,6 @@ IndexRemapper::~IndexRemapper() {
 void IndexRemapper::GenerateMap(const char* doc_id_map_filename) {
   // Scan docID remapping file, and find the largest docID that we have to deal with.
   ifstream doc_id_mapping_stream(doc_id_map_filename);
-
   if (!doc_id_mapping_stream) {
     GetErrorLogger().Log("Could not open docID remapping file '" + string(doc_id_map_filename) + "'.", true);
   }
@@ -143,15 +142,15 @@ void IndexRemapper::GenerateMap(const char* doc_id_map_filename) {
   doc_id_mapping_stream.seekg(0, ios::beg);
 
   // Create one array, indexed by the old docID.
-  doc_id_map_start_ = min_curr_doc_id;  // TODO: Need to use this.
-  doc_id_map_size_ = max_curr_doc_id;
+  doc_id_map_start_ = min_remapped_doc_id;  // TODO: Need to use this.
+  doc_id_map_size_ = max_remapped_doc_id;
   doc_id_map_ = new uint32_t[doc_id_map_size_];
+  memset(doc_id_map_, 0, doc_id_map_size_);
 
   while (getline(doc_id_mapping_stream, curr_line)) {
     curr_line_stream.str(curr_line);
     curr_line_stream >> curr_doc_id >> remapped_doc_id;
-
-    doc_id_map_[curr_doc_id] = remapped_doc_id;
+    doc_id_map_[remapped_doc_id] = curr_doc_id;
   }
 }
 
@@ -325,6 +324,7 @@ void IndexRemapper::WriteMetaFile(const std::string& meta_filename) {
   // TODO: Need to write the document offset to be used for the true docIDs in the index.
   // This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in better compression.
 
+  index_metafile.AddKeyValuePair(meta_properties::kRemappedIndex, Stringify(true));
   index_metafile.AddKeyValuePair(meta_properties::kIncludesPositions, Stringify(includes_positions_));
   index_metafile.AddKeyValuePair(meta_properties::kIncludesContexts, Stringify(includes_contexts_));
   index_metafile.AddKeyValuePair(meta_properties::kIndexDocIdCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexDocIdCoding), false));
