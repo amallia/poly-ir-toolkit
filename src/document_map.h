@@ -193,8 +193,15 @@ public:
   ~DocumentMapReader();
 
   int GetDocumentLength(uint32_t doc_id) const {
-    return basic_doc_map_buffer_[doc_id].doc_len;
+    if (doc_id_map_ != NULL) {
+      // TODO: Build another table so we don't need another layer of redirection. For now, we leave it be.
+      return basic_doc_map_buffer_[doc_id_map_[doc_id]].doc_len;
+    } else {
+      return basic_doc_map_buffer_[doc_id].doc_len;
+    }
   }
+
+  void LoadRemappingTranslationTable(const char* doc_id_map_filename);
 
   std::string GetDocumentUrl(uint32_t doc_id) const;
 
@@ -213,6 +220,10 @@ private:
 
   int basic_doc_map_buffer_size_;
   DocMapEntry* basic_doc_map_buffer_;
+
+  // Used when the index has been remapped. Thus, we need this translation layer for docIDs.
+  uint32_t* doc_id_map_;
+  uint32_t doc_id_map_size_;
 };
 
 #endif /* DOCUMENT_MAP_H_ */

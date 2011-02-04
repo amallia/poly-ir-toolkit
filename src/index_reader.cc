@@ -1113,6 +1113,15 @@ IndexReader::IndexReader(Purpose purpose, CacheManager& cache_manager, const cha
   coding_policy_helper::LoadPolicyAndCheck(frequency_decompressor_, meta_info_.GetValue(meta_properties::kIndexFrequencyCoding), "frequency");
   coding_policy_helper::LoadPolicyAndCheck(position_decompressor_, meta_info_.GetValue(meta_properties::kIndexPositionCoding), "position");
   coding_policy_helper::LoadPolicyAndCheck(block_header_decompressor_, meta_info_.GetValue(meta_properties::kIndexBlockHeaderCoding), "block header");
+
+  // If this index had it's docIDs remapped, we tell the document map to load the translation table.
+  // TODO: If there are errors reading the values for these keys (most likely missing value), we assume they're false
+  //       (because that would require updating the index meta file generation in some places, which should be done eventually).
+  KeyValueStore::KeyValueResult<long int> remapped_index_res = meta_info_.GetNumericalValue(meta_properties::kRemappedIndex);
+  if (!remapped_index_res.error() && remapped_index_res.value_t()) {
+    cout << "Loading document map translation table." << endl;
+    document_map_.LoadRemappingTranslationTable("url_sorted_doc_id_mapping");
+  }
 }
 
 ListData* IndexReader::OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query) {

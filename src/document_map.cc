@@ -42,8 +42,12 @@
 #include <iostream>
 #endif
 
+#include <fstream>
+#include <limits>
+
 #include "globals.h"
 #include "logger.h"
+#include "meta_file_properties.h"
 using namespace std;
 
 /**************************************************************************************************************************************************************
@@ -163,7 +167,9 @@ DocumentMapReader::DocumentMapReader(const char* basic_document_map_filename, co
   basic_doc_map_fd_(open(basic_document_map_filename, O_RDONLY)),
   extended_doc_map_fd_(open(extended_document_map_filename, O_RDONLY)),
   basic_doc_map_buffer_size_(BasicDocMapSize()),
-  basic_doc_map_buffer_(new DocMapEntry[basic_doc_map_buffer_size_]) {
+  basic_doc_map_buffer_(new DocMapEntry[basic_doc_map_buffer_size_]),
+  doc_id_map_(NULL),
+  doc_id_map_size_(0) {
   int read_bytes = sizeof(*basic_doc_map_buffer_) * basic_doc_map_buffer_size_;
   ssize_t read_ret = read(basic_doc_map_fd_, basic_doc_map_buffer_, read_bytes);
   if (read_ret < 0) {
@@ -271,10 +277,57 @@ string DocumentMapReader::DecodeDocumentExtendedInfo(uint32_t doc_id, ExtendedIn
   }
 }
 
+void DocumentMapReader::LoadRemappingTranslationTable(const char* doc_id_map_filename) {
+  // Scan docID remapping file, and find the largest docID that we have to deal with.
+  ifstream doc_id_mapping_stream(doc_id_map_filename);
+  if (!doc_id_mapping_stream) {
+    GetErrorLogger().Log("Could not open docID remapping file '" + string(doc_id_map_filename) + "'.", true);
+  }
+
+  string curr_line;
+  istringstream curr_line_stream;
+  uint32_t curr_doc_id, remapped_doc_id;
+  uint32_t min_curr_doc_id = numeric_limits<uint32_t>::max();
+  uint32_t min_remapped_doc_id = numeric_limits<uint32_t>::max();
+  uint32_t max_curr_doc_id = 0;
+  uint32_t max_remapped_doc_id = 0;
+
+  while (getline(doc_id_mapping_stream, curr_line)) {
+    curr_line_stream.str(curr_line);
+    curr_line_stream >> curr_doc_id >> remapped_doc_id;
+
+    if (curr_doc_id < min_curr_doc_id)
+      min_curr_doc_id = curr_doc_id;
+
+    if (remapped_doc_id < min_remapped_doc_id)
+      min_remapped_doc_id = remapped_doc_id;
+
+    if (curr_doc_id > max_curr_doc_id)
+      max_curr_doc_id = curr_doc_id;
+
+    if (remapped_doc_id > max_remapped_doc_id)
+      max_remapped_doc_id = remapped_doc_id;
+  }
+
+  // Reset stream to the beginning.
+  doc_id_mapping_stream.clear();
+  doc_id_mapping_stream.seekg(0, ios::beg);
+
+  // Create one array, indexed by the old docID.
+  doc_id_map_size_ = max_curr_doc_id;
+  doc_id_map_ = new uint32_t[doc_id_map_size_];
+
+  while (getline(doc_id_mapping_stream, curr_line)) {
+    curr_line_stream.str(curr_line);
+    curr_line_stream >> curr_doc_id >> remapped_doc_id;
+    doc_id_map_[curr_doc_id] = remapped_doc_id;
+  }
+}
+
 string DocumentMapReader::GetDocumentUrl(uint32_t doc_id) const {
-  return DecodeDocumentExtendedInfo(doc_id, kDocUrl);
+  return DecodeDocumentExtendedInfo((doc_id_map_ != NULL) ? doc_id_map_[doc_id] : doc_id, kDocUrl);
 }
 
 string DocumentMapReader::GetDocumentNumber(uint32_t doc_id) const {
-  return DecodeDocumentExtendedInfo(doc_id, kDocNum);
+  return DecodeDocumentExtendedInfo((doc_id_map_ != NULL) ? doc_id_map_[doc_id] : doc_id, kDocNum);
 }

@@ -34,6 +34,11 @@
 
 namespace meta_properties {
 
+// Whether the index has been remapped (that is, the docIDs have been reordered based upon some mapping).
+// If the index is remapped, the document map automatically loads the mapping file (currently, must be named 'url_sorted_doc_id_mapping'),
+// which is used to get the proper document lengths and URLs for the remapped docIDs.
+static const char kRemappedIndex[] = "remapped_index";
+
 // Whether the index is layered.
 static const char kLayeredIndex[] = "layered_index";
 
