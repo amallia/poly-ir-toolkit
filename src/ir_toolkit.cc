@@ -545,7 +545,7 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
 //       Name of index should probably be specified as command option as well.
 void RemapIndexDocIds(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename) {
   IndexRemapper index_remapper(IndexFiles(index_filename, lexicon_filename, doc_map_filename, meta_info_filename), "index_remapped");
-  index_remapper.GenerateMap("url_sorted_doc_id_mapping");
+  index_remapper.GenerateMap(command_line_args.doc_mapping_file);
   index_remapper.Remap();
 }
 
@@ -555,14 +555,14 @@ void LayerifyIndex(const char* index_filename, const char* lexicon_filename, con
   layered_index_generator.CreateLayeredIndex();
 }
 
-void GenerateUrlSortedDocIdMappingFile() {
+void GenerateUrlSortedDocIdMappingFile(const char* document_urls_filename) {
   GetDefaultLogger().Log("Generating URL sorted docID mapping file...", false);
 
   CollectionUrlExtractor collection_url_extractor;
   collection_url_extractor.ProcessDocumentCollections(cin);
 
   Timer url_extraction_time;
-  collection_url_extractor.ParseTrec("url_sorted_doc_id_mapping");
+  collection_url_extractor.ParseTrec(document_urls_filename);
   GetDefaultLogger().Log("Time Elapsed: " + Stringify(url_extraction_time.GetElapsedTime()), false);
 }
 
@@ -605,10 +605,8 @@ void OverrideConfigurationOptions(const string& options) {
   }
 }
 
-// Displays usage information.
+// Displays common usage information. For more details, the project wiki should be consulted.
 // TODO: Update the help information.
-//       URL sorted docID mapping generator (generate-url-sorted-doc-mapping).
-//       (doc-mapping-file)
 void Help() {
   cout << "To index: irtk --index\n";
   cout << "To merge: irtk --merge=[value]\n";
@@ -820,14 +818,13 @@ int main(int argc, char** argv) {
                                       { "cat-term", required_argument, NULL, 0 },                         // Specify the inverted list (term) on which we want to run the cat procedure.
                                       { "diff", no_argument, NULL, 'd' },                                 // Outputs the differences between two inverted lists.
                                       { "diff-term", required_argument, NULL, 0 },                        // Specify the inverted list (term) on which we want to run the diff procedure.
-                                      { "remap", no_argument, NULL, 0 },                                  // Remaps an index.
+                                      { "remap", required_argument, NULL, 0 },                            // Remaps an index. The argument specifies the document mapping file to use for the remap procedure.
                                       { "layerify", no_argument, NULL, 0 },                               // Creates a layered index.
                                       { "retrieve-index-data", required_argument, NULL, 0 },              // Retrieves index data for an inverted list into an in-memory array. See function 'RetrieveIndexData()'.
                                       { "loop-over-index-data", required_argument, NULL, 0 },             // Loops over an inverted list (decompresses but does not do any top-k). Useful for benchmarking decompression coders.
                                       { "in-memory-index", no_argument, NULL, 0 },                        // Loads the index into main memory.
                                       { "memory-map-index", no_argument, NULL, 0 },                       // Memory maps the index into our address space.
                                       { "block-level-index", no_argument, NULL, 0 },                      // Builds an in-memory block level index.
-                                      { "doc-mapping-file", required_argument, NULL, 0 },                 // Specify the document mapping file to use for the remap procedure.
                                       { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },  // Generates a docID mapping file (docIDs are remapped by URL) that can be used as input to the remap procedure.
                                       { "config-options", required_argument, NULL, 0 },                   // Overrides/adds options defined in the configuration file.
                                       { "test-compression", no_argument, NULL, 0 },                       // Runs compression tests on some randomly generated data.
@@ -925,6 +922,8 @@ int main(int argc, char** argv) {
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("remap", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kRemap;
+          command_line_args.doc_mapping_file = new char[strlen(optarg)];
+          memcpy(command_line_args.doc_mapping_file, optarg, strlen(optarg));
         } else if (strcmp("layerify", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kLayerify;
         } else if (strcmp("cat-term", long_opts[long_index].name) == 0 || strcmp("diff-term", long_opts[long_index].name) == 0) {
@@ -949,11 +948,8 @@ int main(int argc, char** argv) {
           SetConfigurationOption(string(config_properties::kMemoryMappedIndex) + string("=true"));
         } else if (strcmp("block-level-index", long_opts[long_index].name) == 0) {
           SetConfigurationOption(string(config_properties::kUseBlockLevelIndex) + string("=true"));
-        } else if (strcmp("doc-mapping-file", long_opts[long_index].name) == 0) {
-          command_line_args.doc_mapping_file = new char[strlen(optarg)];
-          memcpy(command_line_args.doc_mapping_file, optarg, strlen(optarg));
         } else if (strcmp("generate-url-sorted-doc-mapping", long_opts[long_index].name) == 0) {
-          GenerateUrlSortedDocIdMappingFile();
+          GenerateUrlSortedDocIdMappingFile(optarg);
           return EXIT_SUCCESS;
         } else if (strcmp("config-options", long_opts[long_index].name) == 0) {
           OverrideConfigurationOptions(optarg);
