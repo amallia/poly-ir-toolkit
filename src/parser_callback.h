@@ -32,6 +32,9 @@
 #ifndef PARSER_CALLBACK_H_
 #define PARSER_CALLBACK_H_
 
+// Enables debugging output for this module.
+//#define PARSER_CALLBACK_DEBUG
+
 #include <iostream>
 #include <string>
 #include <utility>
@@ -83,6 +86,8 @@ public:
 
   void ProcessUrl(const char* url, int url_len, uint32_t doc_id);
 
+  void ProcessDocno(const char* docno, int docno_len, uint32_t doc_id);
+
 private:
   PostingCollectionController* posting_collection_controller_;
 };
@@ -92,17 +97,18 @@ inline IndexingParserCallback::IndexingParserCallback(PostingCollectionControlle
 }
 
 inline void IndexingParserCallback::ProcessTerm(const char* term, int term_len, uint32_t doc_id, uint32_t position, unsigned char context) {
-  // TODO: Detects skips in docIDs. Assumes docIDs assigned sequentially. For catching potential parser bugs.
+#ifdef PARSER_CALLBACK_DEBUG
+  // Detects skips in docIDs. Assumes docIDs assigned sequentially. For catching potential parser bugs.
   static int lost_doc_id_count = 0;
   static uint32_t prev_doc_id = 0;
   if (doc_id > prev_doc_id) {
     if (doc_id > (prev_doc_id + 1)) {
-      GetErrorLogger().Log("No postings for docID: " + Stringify(prev_doc_id + 1) + " and " + Stringify(doc_id - prev_doc_id - 2)
-          + " more docs.", false);
+      GetErrorLogger().Log("No postings for docID: " + Stringify(prev_doc_id + 1) + " and " + Stringify(doc_id - prev_doc_id - 2) + " more docs.", false);
       lost_doc_id_count += (doc_id - prev_doc_id - 1);
     }
     prev_doc_id = doc_id;
   }
+#endif
 
   Posting posting(term, term_len, doc_id, position, context);
   posting_collection_controller_->InsertPosting(posting);
@@ -115,6 +121,10 @@ inline void IndexingParserCallback::ProcessDocLength(int doc_length, uint32_t do
 inline void IndexingParserCallback::ProcessUrl(const char* url, int url_len, uint32_t doc_id) {
   assert(url_len > 7);  // We strip away the 'http://' part.
   posting_collection_controller_->SaveDocUrl(url + 7, url_len - 7, doc_id);
+}
+
+inline void IndexingParserCallback::ProcessDocno(const char* docno, int docno_len, uint32_t doc_id) {
+  posting_collection_controller_->SaveDocno(docno, docno_len, doc_id);
 }
 
 /**************************************************************************************************************************************************************
