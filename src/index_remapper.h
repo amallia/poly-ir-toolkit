@@ -31,6 +31,9 @@
 #ifndef INDEX_REMAPPER_H_
 #define INDEX_REMAPPER_H_
 
+// Enables debugging output for this module.
+//#define INDEX_REMAPPER_DEBUG
+
 #include <cassert>
 #include <stdint.h>
 
