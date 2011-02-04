@@ -38,6 +38,10 @@
 #include <sys/types.h>
 #include <unistd.h>
 
+#ifdef DOCUMENT_MAP_DEBUG
+#include <iostream>
+#endif
+
 #include "globals.h"
 #include "logger.h"
 using namespace std;
@@ -46,62 +50,108 @@ using namespace std;
  * DocumentMapWriter
  *
  **************************************************************************************************************************************************************/
-DocumentMapWriter::DocumentMapWriter(const char* document_map_filename_lengths, const char* document_map_filename_urls) :
-    kDocMapBufferSize(2097152),
-    doc_map_fd_lengths_(open(document_map_filename_lengths, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
-    doc_map_buffer_(new DocMapEntry[kDocMapBufferSize]), doc_map_buffer_len_(0),
-
-    kUrlsBufferSize(33554432),
-    doc_map_fd_urls_(open(document_map_filename_urls, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
-    urls_buffer_(new char[kUrlsBufferSize]), urls_buffer_len_(0) {
-
+DocumentMapWriter::DocumentMapWriter(const char* basic_document_map_filename, const char* extended_document_map_filename) :
+    kBasicDocMapBufferSize(2 << 20),
+    kExtendedBufferSize(32 << 20),
+    basic_doc_map_fd_(open(basic_document_map_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
+    extended_doc_map_fd_(open(extended_document_map_filename, O_WRONLY | O_CREAT | O_TRUNC, S_IRUSR | S_IWUSR | S_IRGRP | S_IROTH)),
+    basic_doc_map_buffer_(new DocMapEntry[kBasicDocMapBufferSize]),
+    extended_doc_map_buffer_(new char[kExtendedBufferSize]),
+    basic_doc_map_buffer_len_(0),
+    extended_doc_map_buffer_len_(0),
+    curr_doc_id_(0),
+    extended_doc_map_file_offset_(0),
+    extended_doc_map_curr_entry_size_(0) {
 }
 
 DocumentMapWriter::~DocumentMapWriter() {
-  DumpBuffer();
-  DumpBufferUrls();
-  delete[] doc_map_buffer_;
-  delete[] urls_buffer_;
-  close(doc_map_fd_lengths_);  //TODO: Check return value.
-  close(doc_map_fd_urls_);  //TODO: Check return value.
+  DumpBasicDocMapBuffer();
+  DumpExtendedDocMapBuffer();
+  delete[] basic_doc_map_buffer_;
+  delete[] extended_doc_map_buffer_;
+  int close_ret;
+  close_ret = close(basic_doc_map_fd_);
+  assert(close_ret != -1);
+  close_ret = close(extended_doc_map_fd_);
+  assert(close_ret != -1);
 }
 
-void DocumentMapWriter::AddDocMapEntry(const DocMapEntry& doc_map_entry) {
-  assert(doc_map_buffer_len_ < kDocMapBufferSize);
+void DocumentMapWriter::AddDocLen(int doc_len, uint32_t doc_id) {
+  assert(basic_doc_map_buffer_len_ < kBasicDocMapBufferSize);
+  assert(doc_id == curr_doc_id_);  // The document length always comes last (after the document number and URL).
 
-  doc_map_buffer_[doc_map_buffer_len_++] = doc_map_entry;
-  if(doc_map_buffer_len_ == kDocMapBufferSize) {
-    DumpBuffer();
-    doc_map_buffer_len_ = 0;
+  DocMapEntry doc_map_entry = {doc_len, extended_doc_map_file_offset_};
+  basic_doc_map_buffer_[basic_doc_map_buffer_len_++] = doc_map_entry;
+  if (basic_doc_map_buffer_len_ == kBasicDocMapBufferSize) {
+    DumpBasicDocMapBuffer();
+    basic_doc_map_buffer_len_ = 0;
+  }
+
+  extended_doc_map_file_offset_ += extended_doc_map_curr_entry_size_;
+  extended_doc_map_curr_entry_size_ = 0;
+}
+
+void DocumentMapWriter::AddDocUrl(const char* url, int url_len, uint32_t doc_id) {
+  assert(doc_id >= curr_doc_id_);
+
+  if (doc_id > curr_doc_id_) {
+    curr_doc_id_ = doc_id;
+  }
+
+  if (extended_doc_map_buffer_len_ + static_cast<int> (sizeof(url_len)) + url_len > kExtendedBufferSize) {
+    DumpExtendedDocMapBuffer();
+    extended_doc_map_buffer_len_ = 0;
+  }
+
+  memcpy(extended_doc_map_buffer_ + extended_doc_map_buffer_len_, &url_len, sizeof(url_len));
+  extended_doc_map_buffer_len_ += sizeof(url_len);
+
+  memcpy(extended_doc_map_buffer_ + extended_doc_map_buffer_len_, url, url_len);
+  extended_doc_map_buffer_len_ += url_len;
+
+  extended_doc_map_curr_entry_size_ += sizeof(url_len) + url_len;
+}
+
+void DocumentMapWriter::AddDocNum(const char* docnum, int docnum_len, uint32_t doc_id) {
+  assert(doc_id >= curr_doc_id_);
+
+  if (doc_id > curr_doc_id_) {
+    curr_doc_id_ = doc_id;
+  }
+
+  if (extended_doc_map_buffer_len_ + static_cast<int> (sizeof(docnum_len)) + docnum_len > kExtendedBufferSize) {
+    DumpExtendedDocMapBuffer();
+    extended_doc_map_buffer_len_ = 0;
+  }
+
+  memcpy(extended_doc_map_buffer_ + extended_doc_map_buffer_len_, &docnum_len, sizeof(docnum_len));
+  extended_doc_map_buffer_len_ += sizeof(docnum_len);
+
+  memcpy(extended_doc_map_buffer_ + extended_doc_map_buffer_len_, docnum, docnum_len);
+  extended_doc_map_buffer_len_ += docnum_len;
+
+  extended_doc_map_curr_entry_size_ += sizeof(docnum_len) + docnum_len;
+}
+
+void DocumentMapWriter::DumpBasicDocMapBuffer() {
+  int write_bytes = sizeof(*basic_doc_map_buffer_) * basic_doc_map_buffer_len_;
+  ssize_t write_ret = write(basic_doc_map_fd_, basic_doc_map_buffer_, write_bytes);
+  if (write_ret < 0) {
+    GetErrorLogger().LogErrno("write() in DocumentMapWriter::DumpBasicDocMapBuffer()", errno, true);
+  } else if (write_ret != write_bytes) {
+    GetErrorLogger().Log("write() in DocumentMapWriter::DumpBasicDocMapBuffer(): wrote " + Stringify(write_ret) + " bytes, but requested "
+        + Stringify(write_bytes) + " bytes.", true);
   }
 }
 
-void DocumentMapWriter::DumpBuffer() {
-  int write_ret = write(doc_map_fd_lengths_, doc_map_buffer_, sizeof(*doc_map_buffer_) * doc_map_buffer_len_);
-
-  if(write_ret < 0) {
-    GetErrorLogger().Log("write() oops", true);
-  }
-}
-
-void DocumentMapWriter::AddUrl(const char* url, int url_len) {
-  if (urls_buffer_len_ + static_cast<int> (sizeof(url_len)) + url_len > kUrlsBufferSize) {
-    DumpBufferUrls();
-    urls_buffer_len_ = 0;
-  }
-
-  memcpy(urls_buffer_ + urls_buffer_len_, &url_len, sizeof(url_len));
-  urls_buffer_len_ += sizeof(url_len);
-
-  memcpy(urls_buffer_ + urls_buffer_len_, url, url_len);
-  urls_buffer_len_ += url_len;
-}
-
-void DocumentMapWriter::DumpBufferUrls() {
-  int write_ret = write(doc_map_fd_urls_, urls_buffer_, sizeof(*urls_buffer_) * urls_buffer_len_);
-
-  if(write_ret < 0) {
-    GetErrorLogger().Log("write() oops", true);
+void DocumentMapWriter::DumpExtendedDocMapBuffer() {
+  int write_bytes = sizeof(*extended_doc_map_buffer_) * extended_doc_map_buffer_len_;
+  ssize_t write_ret = write(extended_doc_map_fd_, extended_doc_map_buffer_, write_bytes);
+  if (write_ret < 0) {
+    GetErrorLogger().LogErrno("write() in DocumentMapWriter::DumpExtendedDocMapBuffer()", errno, true);
+  } else if (write_ret != write_bytes) {
+    GetErrorLogger().Log("write() in DocumentMapWriter::DumpExtendedDocMapBuffer(): wrote " + Stringify(write_ret) + " bytes, but requested "
+        + Stringify(write_bytes) + " bytes.", true);
   }
 }
 
@@ -109,28 +159,122 @@ void DocumentMapWriter::DumpBufferUrls() {
  * DocumentMapReader
  *
  **************************************************************************************************************************************************************/
-DocumentMapReader::DocumentMapReader(const char* document_map_filename) :
-  doc_map_fd_(open(document_map_filename, O_RDONLY)), doc_map_buffer_size_(DocMapSize()),
-  doc_map_buffer_(new DocMapEntry[doc_map_buffer_size_]) {
-  int read_ret = read(doc_map_fd_, doc_map_buffer_, doc_map_buffer_size_ * sizeof(*doc_map_buffer_));
-  if (read_ret == -1)
-    assert(false);
+DocumentMapReader::DocumentMapReader(const char* basic_document_map_filename, const char* extended_document_map_filename) :
+  basic_doc_map_fd_(open(basic_document_map_filename, O_RDONLY)),
+  extended_doc_map_fd_(open(extended_document_map_filename, O_RDONLY)),
+  basic_doc_map_buffer_size_(BasicDocMapSize()),
+  basic_doc_map_buffer_(new DocMapEntry[basic_doc_map_buffer_size_]) {
+  int read_bytes = sizeof(*basic_doc_map_buffer_) * basic_doc_map_buffer_size_;
+  ssize_t read_ret = read(basic_doc_map_fd_, basic_doc_map_buffer_, read_bytes);
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in DocumentMapReader::DocumentMapReader()", errno, true);
+  } else if (read_ret != read_bytes) {
+    GetErrorLogger().Log("read() in DocumentMapReader::DocumentMapReader(): read " + Stringify(read_ret) + " bytes, but requested " + Stringify(read_bytes)
+        + " bytes.", true);
+  }
 }
 
 DocumentMapReader::~DocumentMapReader() {
-  delete[] doc_map_buffer_;
-  close(doc_map_fd_);
+  delete[] basic_doc_map_buffer_;
+  int close_ret;
+  close_ret = close(basic_doc_map_fd_);
+  assert(close_ret != -1);
+  close_ret = close(extended_doc_map_fd_);
+  assert(close_ret != -1);
 }
 
-int DocumentMapReader::DocMapSize() {
+int DocumentMapReader::BasicDocMapSize() {
   struct stat stat_buf;
-  if (fstat(doc_map_fd_, &stat_buf) < 0) {
-    GetErrorLogger().LogErrno("fstat() in DocumentMapReader::DocMapSize()", errno, true);
+  if (fstat(basic_doc_map_fd_, &stat_buf) < 0) {
+    GetErrorLogger().LogErrno("fstat() in DocumentMapReader::BasicDocMapSize()", errno, true);
   }
 
-//  cout << "stat_buf.st_size: " << stat_buf.st_size << endl;
-//  cout << "sizeof(*doc_map_buffer_): " << sizeof(*doc_map_buffer_) << endl;
+  assert(stat_buf.st_size % sizeof(*basic_doc_map_buffer_) == 0);
+  return stat_buf.st_size / sizeof(*basic_doc_map_buffer_);
+}
 
-  assert(stat_buf.st_size % sizeof(*doc_map_buffer_) == 0);
-  return stat_buf.st_size / sizeof(*doc_map_buffer_);
+string DocumentMapReader::DecodeDocumentExtendedInfo(uint32_t doc_id, ExtendedInfoComponent component) const {
+  off_t seek_ret = lseek(extended_doc_map_fd_, basic_doc_map_buffer_[doc_id].extended_file_offset, SEEK_SET);
+  if (seek_ret < 0) {
+    GetErrorLogger().LogErrno("lseek() in DocumentMapReader::GetDocumentUrl()", errno, true);
+  }
+  assert(seek_ret == basic_doc_map_buffer_[doc_id].extended_file_offset);
+
+  ssize_t read_ret;
+
+  int docnum_len;
+  read_ret = read(extended_doc_map_fd_, &docnum_len, sizeof(docnum_len));
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in DocumentMapReader::DecodeDocumentExtendedInfo()", errno, true);
+  } else if (read_ret != sizeof(docnum_len)) {
+    GetErrorLogger().Log("read() in DocumentMapReader::DecodeDocumentExtendedInfo(): read " + Stringify(read_ret) + " bytes, but requested "
+        + Stringify(sizeof(docnum_len)) + " bytes.", true);
+  }
+
+#ifdef DOCUMENT_MAP_DEBUG
+  cout << "docnum_len: " << docnum_len << endl;
+#endif
+
+  char* docnum_buffer = new char[docnum_len];
+  read_ret = read(extended_doc_map_fd_, docnum_buffer, docnum_len);
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in DocumentMapReader::DecodeDocumentExtendedInfo()", errno, true);
+  } else if (read_ret != docnum_len) {
+    GetErrorLogger().Log("read() in DocumentMapReader::DecodeDocumentExtendedInfo(): read " + Stringify(read_ret) + " bytes, but requested "
+        + Stringify(docnum_len) + " bytes.", true);
+  }
+
+#ifdef DOCUMENT_MAP_DEBUG
+  cout << "docnum_buffer: " << string(docnum_buffer, docnum_len) << endl;
+#endif
+
+  string docnum_str = string(docnum_buffer, docnum_len);
+  delete[] docnum_buffer;
+
+  int url_len;
+  read_ret = read(extended_doc_map_fd_, &url_len, sizeof(url_len));
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in DocumentMapReader::DecodeDocumentExtendedInfo()", errno, true);
+  } else if (read_ret != sizeof(url_len)) {
+    GetErrorLogger().Log("read() in DocumentMapReader::DecodeDocumentExtendedInfo(): read " + Stringify(read_ret) + " bytes, but requested "
+        + Stringify(sizeof(url_len)) + " bytes.", true);
+  }
+
+#ifdef DOCUMENT_MAP_DEBUG
+  cout << "url_len: " << url_len << endl;
+#endif
+
+  char* url_buffer = new char[url_len];
+  read_ret = read(extended_doc_map_fd_, url_buffer, url_len);
+  if (read_ret < 0) {
+    GetErrorLogger().LogErrno("read() in DocumentMapReader::DecodeDocumentExtendedInfo()", errno, true);
+  } else if (read_ret != url_len) {
+    GetErrorLogger().Log("read() in DocumentMapReader::DecodeDocumentExtendedInfo(): read " + Stringify(read_ret) + " bytes, but requested "
+        + Stringify(url_len) + " bytes.", true);
+  }
+
+#ifdef DOCUMENT_MAP_DEBUG
+  cout << "url_buffer: " << string(url_buffer, url_len) << endl;
+#endif
+
+  string url_str = string(url_buffer, url_len);
+  delete[] url_buffer;
+
+  switch(component) {
+    case kDocNum:
+      return docnum_str;
+    case kDocUrl:
+      return url_str;
+    default:
+      assert(false);
+      return url_str;
+  }
+}
+
+string DocumentMapReader::GetDocumentUrl(uint32_t doc_id) const {
+  return DecodeDocumentExtendedInfo(doc_id, kDocUrl);
+}
+
+string DocumentMapReader::GetDocumentNumber(uint32_t doc_id) const {
+  return DecodeDocumentExtendedInfo(doc_id, kDocNum);
 }
