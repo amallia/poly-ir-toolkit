@@ -741,7 +741,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
 
     // Compute partial BM25 sum.
     f_d_t = list->GetFreq();
-    doc_len = index_reader_.GetDocLen(curr_doc_id);
+    doc_len = index_reader_.document_map().GetDocumentLength(curr_doc_id);
     partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
 
@@ -843,7 +843,7 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
     if (curr_doc_id == accumulators[accumulator_offset].doc_id) {
       // Compute partial BM25 sum.
       f_d_t = list->GetFreq();
-      doc_len = index_reader_.GetDocLen(curr_doc_id);
+      doc_len = index_reader_.document_map().GetDocumentLength(curr_doc_id);
       partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
 //      //////////////////////TODO: DEBUG:
@@ -1309,7 +1309,7 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
         if(top->first == curr_doc_id) {
           // Compute BM25 score from frequencies.
           f_d_t = lists[top->second]->GetFreq();
-          doc_len = index_reader_.GetDocLen(top->first);
+          doc_len = index_reader_.document_map().GetDocumentLength(top->first);
           bm25_sum += idf_t[top->second] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
           ++num_postings_scored_;
@@ -1345,7 +1345,7 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
     } else {
       // Compute BM25 score from frequencies.
       f_d_t = lists[top->second]->GetFreq();
-      doc_len = index_reader_.GetDocLen(top->first);
+      doc_len = index_reader_.document_map().GetDocumentLength(top->first);
       partial_bm25_sum = idf_t[top->second] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
       ++num_postings_scored_;
@@ -1618,7 +1618,7 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
         for(i = 0; i < num_lists_remaining && pivot.first == lists_curr_postings[i].first; ++i) {
           // Compute the BM25 score from frequencies.
           f_d_t = list_data_pointers[lists_curr_postings[i].second]->GetFreq();
-          doc_len = index_reader_.GetDocLen(lists_curr_postings[i].first);
+          doc_len = index_reader_.document_map().GetDocumentLength(lists_curr_postings[i].first);
           bm25_sum += idf_t[lists_curr_postings[i].second] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
           ++num_postings_scored_;
@@ -1979,7 +1979,7 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
 
           // Compute BM25 score from frequencies.
           f_d_t = list_data_pointers[curr_list_idx]->GetFreq();
-          doc_len = index_reader_.GetDocLen(lists_curr_postings[curr_list_idx]);
+          doc_len = index_reader_.document_map().GetDocumentLength(lists_curr_postings[curr_list_idx]);
           bm25_sum += idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
           ++num_postings_scored_;
@@ -2151,7 +2151,7 @@ int QueryProcessor::IntersectLists(ListData** merge_lists, int num_merge_lists, 
       bm25_sum = 0;
       for (i = 0; i < num_lists; ++i) {
         f_d_t = lists[i]->GetFreq();
-        doc_len = index_reader_.GetDocLen(did);
+        doc_len = index_reader_.document_map().GetDocumentLength(did);
         bm25_sum += idf_t[i] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
       }
 
@@ -2286,7 +2286,7 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
       // Compute BM25 score from frequencies.
       bm25_sum = 0;
-      doc_len_d = index_reader_.GetDocLen(did);
+      doc_len_d = index_reader_.document_map().GetDocumentLength(did);
       for (i = 0; i < kNumLists; ++i) {
         f_d_t[i] = lists[i]->GetFreq();
         positions_d_t[i] = lists[i]->curr_chunk_decoder().current_positions();
@@ -2550,12 +2550,12 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
         case kNormal:
           if (!silent_mode_)
             cout << setprecision(2) << setw(2) << "Score: " << ranked_results[i].first << "\tDocID: " << ranked_results[i].second << "\tURL: "
-                << index_reader_.GetDocUrl(ranked_results[i].second) << "\n";
+                << index_reader_.document_map().GetDocumentUrl(ranked_results[i].second) << "\n";
           break;
         case kTrec:
           if (!silent_mode_)
-            cout << qid << '\t' << "Q0" << '\t' << index_reader_.GetDocUrl(ranked_results[i].second) << '\t' << i << '\t' << ranked_results[i].first << '\t'
-                << "STANDARD" << "\n";
+            cout << qid << '\t' << "Q0" << '\t' << index_reader_.document_map().GetDocumentNumber(ranked_results[i].second) << '\t' << i << '\t'
+                << ranked_results[i].first << '\t' << "STANDARD" << "\n";
           break;
         case kCompare:
           cout << setprecision(2) << setw(2) << ranked_results[i].first << "\t" << ranked_results[i].second << "\n";
