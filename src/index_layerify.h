@@ -110,7 +110,7 @@ public:
 
   float Bm25Score(const IndexEntry& entry) const {
     uint32_t f_d_t = entry.frequency;
-    int doc_len = doc_map_reader_.GetDocumentLen(entry.doc_id);
+    int doc_len = doc_map_reader_.GetDocumentLength(entry.doc_id);
     float bm25 = kIdfT * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
     assert(!isnan(bm25));
