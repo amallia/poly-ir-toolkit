@@ -397,12 +397,12 @@ IndexBuilder::~IndexBuilder() {
   delete[] blocks_buffer_;
   delete[] lexicon_;
 
-  int ret;
-  ret = close(index_fd_);
-  assert(ret != -1);
+  int close_ret;
+  close_ret = close(index_fd_);
+  assert(close_ret != -1);
 
-  ret = close(lexicon_fd_);
-  assert(ret != -1);
+  close_ret = close(lexicon_fd_);
+  assert(close_ret != -1);
 }
 
 void IndexBuilder::Add(const ChunkEncoder& chunk, const char* term, int term_len) {
