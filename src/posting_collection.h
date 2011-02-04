@@ -31,6 +31,9 @@
 #ifndef POSTING_COLLECTION_H_
 #define POSTING_COLLECTION_H_
 
+// Enables debugging output for this module.
+//#define POSTING_COLLECTION_DEBUG
+
 #include <cassert>
 #include <stdint.h>
 
@@ -294,14 +297,6 @@ public:
 
   void AddBlockToList(unsigned char* block_start);
 
-  bool ordered_documents() const {
-    return ordered_documents_;
-  }
-
-  void set_ordered_documents(bool ordered_documents) {
-    ordered_documents_ = ordered_documents;
-  }
-
   bool index_positions() const {
     return index_positions_;
   }
@@ -329,7 +324,6 @@ private:
   int term_len_;
 
   // These are properties of the index to be built. They should be set before adding any postings.
-  bool ordered_documents_;  // Determines whether the docIDs are monotonically increasing.
   bool index_positions_;    // Determines whether the position information will be collected.
   bool index_contexts_;     // Determines whether context information will be collected.
 
@@ -367,6 +361,7 @@ public:
   void InsertPosting(const Posting& posting);
   void SaveDocLength(int doc_length, uint32_t doc_id);
   void SaveDocUrl(const char* url, int url_len, uint32_t doc_id);
+  void SaveDocno(const char* docno, int docno_len, uint32_t doc_id);
 
   uint64_t posting_count() const {
     return posting_count_;
@@ -377,7 +372,7 @@ private:
   PostingCollection* posting_collection_;  // The posting collection for the current mini index.
 
   // TODO: Currently this will write the document map for the complete index.
-  //       We want a separate document map for each index slice.
+  //       Ideally, we want a separate document map for each index slice. This would be especially useful when doing parallel indexing.
   //       We can have a separate method in the current PostingCollection that will be used to insert the document map entries.
   //       Before dumping the current index slice, we can get the overflow document map entry and insert it into the new index slice instead.
   //       Note: if we dump an index before we insert all the postings for it, we know the document map entry will go into the next index slice.
@@ -468,9 +463,8 @@ private:
   uint64_t posting_count_;  // For statistics purposes. Counts the number of postings in the current index we're building.
 
   // Properties of the index to be built.
-  const bool kOrderedDocuments;  // Whether the docIDs are assigned in order.
-  const bool kIndexPositions;    // Whether positions are indexed.
-  const bool kIndexContexts;     // Whether contexts are indexed.
+  const bool kIndexPositions;  // Whether positions are indexed.
+  const bool kIndexContexts;   // Whether contexts are indexed.
 
   // Compressors to be used for various parts of the index.
   CodingPolicy doc_id_compressor_;

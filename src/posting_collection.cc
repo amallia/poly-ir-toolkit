@@ -31,9 +31,6 @@
 // positions (gap coding would produce much smaller integers, so compression would work better) since most docIDs and positions will be smaller than a full
 // integer, so var byte coding would help in this case too.
 //
-// TODO: Need to handle docID reordering. The reordering might come from a file (assume it can fit in memory). We can't do gap coding in this case. Might need
-//       to do an I/O efficient sort on the postings.
-//
 // TODO: Need a way to handle encoding of "magic bytes" into our blocks. These can contain fixed width or variable width data. Can use contexts as a test case
 //       of fixed width magic bytes.
 //
@@ -93,8 +90,17 @@ unsigned char TermBlock::compressed_tmp_posting[11] __attribute__ ((aligned (64)
 int TermBlock::compressed_tmp_posting_len;
 
 TermBlock::TermBlock(const char* term, int term_len) :
-  memory_pool_manager_(&GetMemoryPoolManager()), term_(new char[term_len]), term_len_(term_len), ordered_documents_(true), index_positions_(true),
-      index_contexts_(false), prev_doc_id_(0), prev_position_(0), block_list_(NULL), last_block_(NULL), curr_block_position_(NULL), next_(NULL) {
+  memory_pool_manager_(&GetMemoryPoolManager()),
+  term_(new char[term_len]),
+  term_len_(term_len),
+  index_positions_(true),
+  index_contexts_(false),
+  prev_doc_id_(0),
+  prev_position_(0),
+  block_list_(NULL),
+  last_block_(NULL),
+  curr_block_position_(NULL),
+  next_(NULL) {
   // Need to transform term to lower case.
   for (int i = 0; i < term_len; i++) {
     term_[i] = tolower(static_cast<unsigned char> (term[i]));
@@ -287,7 +293,9 @@ bool TermBlock::DecodePosting(DecodedPosting* decoded_posting) {
 // (this is the summation of all the frequency values).
 //
 // Returns true when some postings have been decoded and false when no postings were able to be decoded.
-bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int* num_docs, int* num_properties, DecodedPosting* prev_posting, bool* prev_posting_valid, Posting* overflow_postings, int* num_overflow_postings, uint32_t overflow_doc_id, uint32_t prev_chunk_last_doc_id) {
+bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* positions, unsigned char* contexts, int* num_docs, int* num_properties,
+                               DecodedPosting* prev_posting, bool* prev_posting_valid, Posting* overflow_postings, int* num_overflow_postings,
+                               uint32_t overflow_doc_id, uint32_t prev_chunk_last_doc_id) {
   assert(doc_ids != NULL);
   assert(frequencies != NULL);
   assert(positions != NULL);
@@ -296,7 +304,6 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   assert(num_properties != NULL && *num_properties > 0);
   assert(prev_posting != NULL);
   assert(prev_posting_valid != NULL);
-  assert(ordered_documents_ == true);
 
   int num_docs_decoded = 0;
   int num_properties_decoded = 0;
@@ -341,7 +348,6 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   // If it wasn't, since we can't "put back" the posting into the block, we'll store it into prev_posting and set prev_posting_valid to true, otherwise set it to false.
   DecodedPosting curr_posting;
   while ((num_docs_decoded < (*num_docs + 1)) && DecodePosting(&curr_posting)) {
-//    if (prev_posting.doc_id() == curr_posting.doc_id()) {  // TODO: For when we don't do docID gaps (we always do docID gaps in such a case).
     if (curr_posting.doc_id() == 0) {
       // A continuation of the same document.
       ++frequencies[num_docs_decoded - 1];
@@ -393,52 +399,22 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
   return true;
 }
 
-// TODO: Document reordering:
-//       Sort a single list in main memory and take d-gaps (and also position gaps). Then build the index as usual.
-// TODO: This interface should be used for when the postings are not accumulated in sorted order.
-// So we'll have to assume the whole list either fits in memory, and get all the postings here and sort them in memory
-// or if we can't assume it to fit in memory (remember we're using a large memory pool for accumulating and it's not completely free'd at this point),
-// we need to dump them to disk and do an external merge sort.
-
-// Fills the supplied array with decoded postings and stores the length actually decoded back into 'decoded_postings_len'.
-// If upon returning, 'decoded_postings_len' is less than the value supplied, then all the postings in this TermBlock have been decoded.
-void TermBlock::DecodePostings(DecodedPosting* decoded_postings, int* decoded_postings_len, Posting* overflow_postings, int* num_overflow_postings,
-                               uint32_t overflow_doc_id) {
-  assert(ordered_documents_ == false);
-
-  int overflow_postings_i = 0;
-  int i;
-  for (i = 0; i < *decoded_postings_len; ++i) {
-    if (DecodePosting(decoded_postings + i) == false)
-      break;
-
-    if (decoded_postings[i].doc_id() == overflow_doc_id) {
-      assert(overflow_postings_i < *num_overflow_postings);
-      overflow_postings[overflow_postings_i++] = Posting(NULL, 0, decoded_postings[i].doc_id(), decoded_postings[i].position(), decoded_postings[i].context());
-    }
-  }
-
-  *decoded_postings_len = i;
-  *num_overflow_postings = overflow_postings_i;
-}
-
 // Compresses posting into a static buffer and records it's length.
 void TermBlock::EncodePosting(const Posting& posting) {
   compressed_tmp_posting_len = 0;
   int encoding_offset;
 
   // If we're continuing to process the same document, can always take position deltas.
-  int position_gap = posting.position();
+  uint32_t position_gap = posting.position();
   if (prev_doc_id_ == posting.doc_id()) {
+    assert((prev_position_ == 0) ? position_gap >= prev_position_ : position_gap > prev_position_);
     position_gap -= prev_position_;
   }
   prev_position_ = posting.position();
 
-  // If the docIDs are assigned such that they are monotonically increasing, we can take docID deltas.
-  int doc_id_gap = posting.doc_id();
-  if (ordered_documents_) {
-    doc_id_gap -= prev_doc_id_;
-  }
+  // Since docIDs are assigned such that they are always monotonically increasing, we take docID deltas.
+  assert(posting.doc_id() >= prev_doc_id_);
+  uint32_t doc_id_gap = posting.doc_id() - prev_doc_id_;
   prev_doc_id_ = posting.doc_id();
 
   // We increment all docID gaps by 1 so they're never 0. Remember to decrement by 1 when decoding!
@@ -530,8 +506,9 @@ bool TermBlock::AddPosting(const Posting& posting) {
  **************************************************************************************************************************************************************/
 MemoryPoolManager::MemoryPoolManager() :
   kMemoryPoolSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kMemoryPoolSize).c_str())),
-      kBlockSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kMemoryPoolBlockSize).c_str())), memory_pool_(new unsigned char[kMemoryPoolSize]),
-      curr_allocated_block_(memory_pool_) {
+  kBlockSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kMemoryPoolBlockSize).c_str())),
+  memory_pool_(new unsigned char[kMemoryPoolSize]),
+  curr_allocated_block_(memory_pool_) {
   if (kMemoryPoolSize == 0) {
     GetErrorLogger().Log("Incorrect configuration value for 'memory_pool_size'", true);
   }
@@ -591,10 +568,12 @@ void MemoryPoolManager::Reset() {
 /**************************************************************************************************************************************************************
  * PostingCollectionController
  *
- * TODO: When doing doc reordering, need to initialize starting docID in index to something other than 0. This is the parameter to PostingCollection().
  **************************************************************************************************************************************************************/
 PostingCollectionController::PostingCollectionController() :
-  index_count_(0), posting_collection_(new PostingCollection(index_count_, 0)), document_map_writer_("index.dmap", "index.dmap_urls"), posting_count_(0) {
+  index_count_(0),
+  posting_collection_(new PostingCollection(index_count_, 0)),
+  document_map_writer_("index.dmap_basic", "index.dmap_extended"),
+  posting_count_(0) {
 }
 
 PostingCollectionController::~PostingCollectionController() {
@@ -634,12 +613,15 @@ void PostingCollectionController::InsertPosting(const Posting& posting) {
 }
 
 void PostingCollectionController::SaveDocLength(int doc_length, uint32_t doc_id) {
-  DocMapEntry doc_map_entry = {doc_length};
-  document_map_writer_.AddDocMapEntry(doc_map_entry);
+  document_map_writer_.AddDocLen(doc_length, doc_id);
 }
 
 void PostingCollectionController::SaveDocUrl(const char* url, int url_len, uint32_t doc_id) {
-  document_map_writer_.AddUrl(url, url_len);
+  document_map_writer_.AddDocUrl(url, url_len, doc_id);
+}
+
+void PostingCollectionController::SaveDocno(const char* docno, int docno_len, uint32_t doc_id) {
+  document_map_writer_.AddDocNum(docno, docno_len, doc_id);
 }
 
 /**************************************************************************************************************************************************************
@@ -647,14 +629,25 @@ void PostingCollectionController::SaveDocUrl(const char* url, int url_len, uint3
  *
  **************************************************************************************************************************************************************/
 PostingCollection::PostingCollection(int index_count, uint32_t starting_doc_id) :
-  kHashTableSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kHashTableSize).c_str())), term_block_table_(kHashTableSize), overflow_postings_(NULL),
-      first_doc_id_in_index_(starting_doc_id), last_doc_id_in_index_(0), num_overflow_postings_(-1), prev_doc_id_(numeric_limits<uint32_t>::max()),
-      prev_doc_length_(0), total_document_lengths_(0), total_num_docs_(0), total_unique_num_docs_(0), index_count_(index_count), posting_count_(0),
-      kOrderedDocuments(true),
-      kIndexPositions((Configuration::GetConfiguration().GetValue(config_properties::kIncludePositions) == "true") ? true : false),
-      kIndexContexts((Configuration::GetConfiguration().GetValue(config_properties::kIncludeContexts) == "true") ? true : false),
-      doc_id_compressor_(CodingPolicy::kDocId), frequency_compressor_(CodingPolicy::kFrequency), position_compressor_(CodingPolicy::kPosition),
-      block_header_compressor_(CodingPolicy::kBlockHeader) {
+  kHashTableSize(atol(Configuration::GetConfiguration().GetValue(config_properties::kHashTableSize).c_str())),
+  term_block_table_(kHashTableSize),
+  overflow_postings_(NULL),
+  first_doc_id_in_index_(starting_doc_id),
+  last_doc_id_in_index_(0),
+  num_overflow_postings_(-1),
+  prev_doc_id_(numeric_limits<uint32_t>::max()),
+  prev_doc_length_(0),
+  total_document_lengths_(0),
+  total_num_docs_(0),
+  total_unique_num_docs_(0),
+  index_count_(index_count),
+  posting_count_(0),
+  kIndexPositions((Configuration::GetConfiguration().GetValue(config_properties::kIncludePositions) == "true") ? true : false),
+  kIndexContexts((Configuration::GetConfiguration().GetValue(config_properties::kIncludeContexts) == "true") ? true : false),
+  doc_id_compressor_(CodingPolicy::kDocId),
+  frequency_compressor_(CodingPolicy::kFrequency),
+  position_compressor_(CodingPolicy::kPosition),
+  block_header_compressor_(CodingPolicy::kBlockHeader) {
   if (kHashTableSize <= 0) {
     GetErrorLogger().Log("Incorrect configuration value for '" + string(config_properties::kHashTableSize) + "'", true);
   }
@@ -680,7 +673,6 @@ bool PostingCollection::InsertPosting(const Posting& posting) {
   TermBlock* curr_tb = term_block_table_.Insert(posting.term(), posting.term_len());
   // Set these properties only on a newly created term block.
   if (curr_tb->block_list() == NULL) {
-    curr_tb->set_ordered_documents(kOrderedDocuments);
     curr_tb->set_index_positions(kIndexPositions);
     curr_tb->set_index_contexts(kIndexContexts);
   }
@@ -699,7 +691,7 @@ bool PostingCollection::InsertPosting(const Posting& posting) {
     ++posting_count_;
   } else {
     // This is the leftover posting, so we won't have any same docIDs as the leftover posting in this index.
-    // TODO: This assumes that the postings inserted into the index all have monotonically increasing docIDs.
+    // This assumes that the postings inserted into the index all have monotonically increasing docIDs, which should always be the case.
     // All postings with the leftover posting docID will be saved and inserted into the index for the next run.
     last_doc_id_in_index_ = posting.doc_id() - 1;
     if (posting.doc_id() == prev_doc_id_) {
