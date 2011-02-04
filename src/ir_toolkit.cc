@@ -1035,6 +1035,11 @@ int main(int argc, char** argv) {
         }
       }
       break;
+    // These don't take any arguments.
+    case CommandLineArgs::kIndex:
+    case CommandLineArgs::kMergeInitial:
+    case CommandLineArgs::kMergeInput:
+      break;
     default:
       assert(false);
   }
