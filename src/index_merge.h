@@ -65,6 +65,7 @@ private:
   // Some index properties.
   bool includes_contexts_;
   bool includes_positions_;
+  bool remapped_index_;
 
   // Compressors to be used for various parts of the index.
   CodingPolicy doc_id_compressor_;

@@ -362,7 +362,7 @@ void LayeredIndexGenerator::DumpToIndex(const DocIdScoreComparison& doc_id_score
   while(index_entries_offset < num_index_entries) {
     int doc_ids_offset = 0;
     int properties_offset = 0;
-    for(doc_ids_offset = 0; doc_ids_offset < ChunkEncoder::kChunkSize && index_entries_offset < num_index_entries; ++doc_ids_offset) {
+    for (doc_ids_offset = 0; doc_ids_offset < ChunkEncoder::kChunkSize && index_entries_offset < num_index_entries; ++doc_ids_offset) {
       const IndexEntry& curr_index_entry = index_entries[index_entries_offset];
 
       doc_ids[doc_ids_offset] = curr_index_entry.doc_id - prev_doc_id;
@@ -376,7 +376,8 @@ void LayeredIndexGenerator::DumpToIndex(const DocIdScoreComparison& doc_id_score
       frequencies[doc_ids_offset] = curr_index_entry.frequency;
 
       if (includes_positions_) {
-        for (uint32_t j = 0; j < curr_index_entry.frequency; ++j) {
+        uint32_t num_positions = min(curr_index_entry.frequency, static_cast<uint32_t> (ChunkEncoder::kMaxProperties));
+        for (uint32_t j = 0; j < num_positions; ++j) {
           positions[properties_offset++] = curr_index_entry.positions[j];
         }
       }
@@ -384,9 +385,8 @@ void LayeredIndexGenerator::DumpToIndex(const DocIdScoreComparison& doc_id_score
       ++index_entries_offset;
     }
 
-    ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
-                                       doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
-                                       position_compressor_);
+    ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
     chunk.set_max_score(GetChunkMaxScore(doc_id_score_comparator, index_entries + (index_entries_offset - doc_ids_offset), doc_ids_offset));
     prev_chunk_last_doc_id = chunk.last_doc_id();
     index_builder_->Add(chunk, curr_term, curr_term_len);
@@ -401,11 +401,7 @@ float LayeredIndexGenerator::GetChunkMaxScore(const DocIdScoreComparison& doc_id
 void LayeredIndexGenerator::WriteMetaFile(const std::string& meta_filename) {
   KeyValueStore index_metafile;
 
-  // TODO: Need to write the document offset to be used for the true docIDs in the index.
-  // This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in better compression.
-
   // Index layer properties.
-  // TODO: search project for WriteMetaFile, and add the layer stuff too!
   index_metafile.AddKeyValuePair(meta_properties::kLayeredIndex, Stringify(true));
   index_metafile.AddKeyValuePair(meta_properties::kNumLayers, Stringify(num_layers_));
   index_metafile.AddKeyValuePair(meta_properties::kOverlappingLayers, Stringify(overlapping_layers_));

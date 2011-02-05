@@ -369,16 +369,13 @@ bool TermBlock::DecodePostings(uint32_t* doc_ids, uint32_t* frequencies, uint32_
       num_properties_decoded_per_doc = 0;
     }
 
-    // We're truncating the number of per document properties.
+    // We're truncating the number of per document properties. However, this will not affect the frequency of the document.
     if (num_properties_decoded_per_doc < ChunkEncoder::kMaxProperties) {
       assert(num_properties_decoded < *num_properties);
       positions[num_properties_decoded] = curr_posting.position();
       contexts[num_properties_decoded] = curr_posting.context();
       ++num_properties_decoded;
       ++num_properties_decoded_per_doc;
-    } else {
-      // If we're truncating, we need to adjust the frequency to be less.
-      --frequencies[num_docs_decoded - 1];
     }
 
     // Decode the doc id from the gaps, and see if it's an overflow doc id.
@@ -798,7 +795,7 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
                                                         last_doc_id_in_index_ + 1, prev_chunk_last_doc_id);
 
       if (num_overflow_postings > 0) {
-        num_properties -= frequencies[num_docs - 1];
+        num_properties -= min(frequencies[num_docs - 1], static_cast<uint32_t> (ChunkEncoder::kMaxProperties));
         num_docs -= 1;
 
         for (int j = overflow_postings_offset; j < (overflow_postings_offset + num_overflow_postings); ++j) {
@@ -813,7 +810,7 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
       if (have_chunk && num_docs > 0) {
         assert(num_properties > 0);
         ChunkEncoder chunk(doc_ids, frequencies, (kIndexPositions ? positions : NULL), (kIndexContexts ? contexts : NULL), num_docs, num_properties,
-                                 prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
+                           prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
         prev_chunk_last_doc_id = chunk.last_doc_id();
         index_builder->Add(chunk, curr_term_block->term(), curr_term_block->term_len());
       }
@@ -834,10 +831,6 @@ void PostingCollection::DumpRun(bool out_of_memory_dump) {
 void PostingCollection::WriteMetaFile(const IndexBuilder* index_builder, const string& meta_filename) {
   KeyValueStore index_metafile;
   ostringstream metafile_values;
-
-  // TODO: Need to write the document offset to be used for the true docIDs in the index
-  //       (and all docIDs would need to have the 'first_doc_id_in_index_' subtracted before insertion to the memory pool).
-  //       This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in slightly better compression.
 
   metafile_values << kIndexPositions;
   index_metafile.AddKeyValuePair(meta_properties::kIncludesPositions, metafile_values.str());

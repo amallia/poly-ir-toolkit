@@ -82,16 +82,9 @@ private:
   CodingPolicy position_compressor_;
   CodingPolicy block_header_compressor_;
 
-  // The following properties are derived from the original index meta info file.
-  uint32_t total_num_docs_;          // The total number of documents.
-  uint32_t total_unique_num_docs_;   // The total number of unique documents.
-  uint64_t total_document_lengths_;  // The total document lengths of all documents.
-  uint64_t document_posting_count_;  // The total document posting count.
-  uint64_t index_posting_count_;     // The total index posting count.
-
   // Assigned as necessary during the remapping operation.
-  uint32_t first_doc_id_in_index_;   // The first docID in the remapped index.
-  uint32_t last_doc_id_in_index_;    // The last docID in the remapped index.
+  uint32_t first_doc_id_in_index_;  // The first docID in the remapped index.
+  uint32_t last_doc_id_in_index_;   // The last docID in the remapped index.
 };
 
 #endif /* INDEX_REMAPPER_H_ */

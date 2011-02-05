@@ -67,11 +67,22 @@ using namespace std;
  *
  **************************************************************************************************************************************************************/
 IndexRemapper::IndexRemapper(const IndexFiles& input_index_files, const string& output_index_prefix) :
-  output_index_files_(output_index_prefix, 0, 0), final_output_index_files_(output_index_prefix), index_(NULL), index_builder_(NULL), index_count_(0),
-      doc_id_map_(NULL), doc_id_map_size_(0), doc_id_map_start_(0), includes_contexts_(true), includes_positions_(true),
-      doc_id_compressor_(CodingPolicy::kDocId), frequency_compressor_(CodingPolicy::kFrequency), position_compressor_(CodingPolicy::kPosition),
-      block_header_compressor_(CodingPolicy::kBlockHeader), total_num_docs_(0), total_unique_num_docs_(0), total_document_lengths_(0),
-      document_posting_count_(0), index_posting_count_(0), first_doc_id_in_index_(numeric_limits<uint32_t>::max()), last_doc_id_in_index_(0) {
+  output_index_files_(output_index_prefix, 0, 0),
+  final_output_index_files_(output_index_prefix),
+  index_(NULL),
+  index_builder_(NULL),
+  index_count_(0),
+  doc_id_map_(NULL),
+  doc_id_map_size_(0),
+  doc_id_map_start_(0),
+  includes_contexts_(true),
+  includes_positions_(true),
+  doc_id_compressor_(CodingPolicy::kDocId),
+  frequency_compressor_(CodingPolicy::kFrequency),
+  position_compressor_(CodingPolicy::kPosition),
+  block_header_compressor_(CodingPolicy::kBlockHeader),
+  first_doc_id_in_index_(numeric_limits<uint32_t>::max()),
+  last_doc_id_in_index_(0) {
   index_builder_ = new IndexBuilder(output_index_files_.lexicon_filename().c_str(), output_index_files_.index_filename().c_str(), block_header_compressor_);
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
@@ -89,13 +100,6 @@ IndexRemapper::IndexRemapper(const IndexFiles& input_index_files, const string& 
 
   if (!index_reader->includes_positions())
     includes_positions_ = false;
-
-  // TODO: These must match in the final merged remapped index.
-  total_num_docs_ = IndexConfiguration::GetResultValue(index_reader->meta_info().GetNumericalValue(meta_properties::kTotalNumDocs), false);
-  total_unique_num_docs_ = IndexConfiguration::GetResultValue(index_reader->meta_info().GetNumericalValue(meta_properties::kTotalUniqueNumDocs), false);
-  total_document_lengths_ = IndexConfiguration::GetResultValue(index_reader->meta_info().GetNumericalValue(meta_properties::kTotalDocumentLengths), false);
-  document_posting_count_ = IndexConfiguration::GetResultValue(index_reader->meta_info().GetNumericalValue(meta_properties::kDocumentPostingCount), false);
-  index_posting_count_ = IndexConfiguration::GetResultValue(index_reader->meta_info().GetNumericalValue(meta_properties::kIndexPostingCount), false);
 
   index_ = new Index(cache_policy, index_reader);
 }
@@ -240,7 +244,8 @@ bool IndexRemapper::CopyToIndexEntry(IndexEntry* index_entry, PositionsPool* pos
 
   if (includes_positions_) {
     const uint32_t* curr_positions = index_->curr_list_data()->curr_chunk_decoder().current_positions();
-    if ((curr_index_entry.positions = positions_pool->StorePositions(curr_positions, curr_index_entry.frequency)) == NULL) {
+    uint32_t num_positions = index_->curr_list_data()->GetNumDocProperties();
+    if ((curr_index_entry.positions = positions_pool->StorePositions(curr_positions, num_positions)) == NULL) {
       // Positions buffer out of space.
       return false;
     }
@@ -291,7 +296,8 @@ void IndexRemapper::DumpToIndex(IndexEntry* index_entries, int num_index_entries
       frequencies[doc_ids_offset] = curr_index_entry.frequency;
 
       if (includes_positions_) {
-        for (uint32_t j = 0; j < curr_index_entry.frequency; ++j) {
+        uint32_t num_positions = min(curr_index_entry.frequency, static_cast<uint32_t> (ChunkEncoder::kMaxProperties));
+        for (uint32_t j = 0; j < num_positions; ++j) {
           positions[properties_offset++] = curr_index_entry.positions[j];
         }
       }
@@ -299,9 +305,8 @@ void IndexRemapper::DumpToIndex(IndexEntry* index_entries, int num_index_entries
       ++index_entries_offset;
     }
 
-    ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
-                                       doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
-                                       position_compressor_);
+    ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
     prev_chunk_last_doc_id = chunk.last_doc_id();
     index_builder_->Add(chunk, curr_term, curr_term_len);
   }
@@ -321,31 +326,42 @@ void IndexRemapper::DumpIndex() {
 void IndexRemapper::WriteMetaFile(const std::string& meta_filename) {
   KeyValueStore index_metafile;
 
-  // TODO: Need to write the document offset to be used for the true docIDs in the index.
-  // This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in better compression.
-
   index_metafile.AddKeyValuePair(meta_properties::kRemappedIndex, Stringify(true));
   index_metafile.AddKeyValuePair(meta_properties::kIncludesPositions, Stringify(includes_positions_));
   index_metafile.AddKeyValuePair(meta_properties::kIncludesContexts, Stringify(includes_contexts_));
-  index_metafile.AddKeyValuePair(meta_properties::kIndexDocIdCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexDocIdCoding), false));
-  index_metafile.AddKeyValuePair(meta_properties::kIndexFrequencyCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexFrequencyCoding), false));
-  index_metafile.AddKeyValuePair(meta_properties::kIndexPositionCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexPositionCoding), false));
-  index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding, IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexBlockHeaderCoding), false));
+  index_metafile.AddKeyValuePair(meta_properties::kIndexDocIdCoding,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexDocIdCoding),
+                                                                    false));
+  index_metafile.AddKeyValuePair(meta_properties::kIndexFrequencyCoding,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexFrequencyCoding),
+                                                                    false));
+  index_metafile.AddKeyValuePair(meta_properties::kIndexPositionCoding,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexPositionCoding),
+                                                                    false));
+  index_metafile.AddKeyValuePair(meta_properties::kIndexBlockHeaderCoding,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kIndexBlockHeaderCoding),
+                                                                    false));
 
   index_metafile.AddKeyValuePair(meta_properties::kTotalNumChunks, Stringify(index_builder_->total_num_chunks()));
   index_metafile.AddKeyValuePair(meta_properties::kTotalNumPerTermBlocks, Stringify(index_builder_->total_num_per_term_blocks()));
 
-  // TODO: These would only really apply to the final remapped index. They aren't necessary in the intermediate indices.
-  index_metafile.AddKeyValuePair(meta_properties::kTotalDocumentLengths, Stringify(total_document_lengths_));
-  index_metafile.AddKeyValuePair(meta_properties::kTotalNumDocs, Stringify(total_num_docs_));
-  index_metafile.AddKeyValuePair(meta_properties::kTotalUniqueNumDocs, Stringify(total_unique_num_docs_));
+  // These would only really apply to the final remapped index. They aren't necessary in the intermediate indices, which is why
+  // the merger actually treats these as the values in the final merged index; i.e. they are not summed up as done in a usual merge.
+  index_metafile.AddKeyValuePair(meta_properties::kTotalDocumentLengths,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kTotalDocumentLengths),
+                                                                    false));
+  index_metafile.AddKeyValuePair(meta_properties::kTotalNumDocs,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kTotalNumDocs),
+                                                                    false));
+  index_metafile.AddKeyValuePair(meta_properties::kTotalUniqueNumDocs,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kTotalUniqueNumDocs),
+                                                                    false));
   index_metafile.AddKeyValuePair(meta_properties::kFirstDocId, Stringify(first_doc_id_in_index_));
   index_metafile.AddKeyValuePair(meta_properties::kLastDocId, Stringify(last_doc_id_in_index_));
-  index_metafile.AddKeyValuePair(meta_properties::kDocumentPostingCount, Stringify(document_posting_count_));
-  if (index_posting_count_ != index_builder_->posting_count()) {
-    GetErrorLogger().Log("Inconsistency in the '" + string(meta_properties::kIndexPostingCount) + "' meta file property detected: "
-        + "value from original index meta file doesn't add up to the value calculated by the index builder.", false);
-  }
+  index_metafile.AddKeyValuePair(meta_properties::kDocumentPostingCount,
+                                 IndexConfiguration::GetResultValue(index_->index_reader()->meta_info().GetStringValue(meta_properties::kDocumentPostingCount),
+                                                                    false));
+
   index_metafile.AddKeyValuePair(meta_properties::kIndexPostingCount, Stringify(index_builder_->posting_count()));
   index_metafile.AddKeyValuePair(meta_properties::kNumUniqueTerms, Stringify(index_builder_->num_unique_terms()));
 

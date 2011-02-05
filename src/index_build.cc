@@ -38,6 +38,7 @@
 #include <cerrno>
 #include <cstring>
 
+#include <algorithm>
 #include <limits>
 
 #include <fcntl.h>
@@ -125,7 +126,7 @@ ChunkEncoder::ChunkEncoder(uint32_t* doc_ids, uint32_t* frequencies, uint32_t* p
     // If the positions weren't included, we must calculate the number of properties based on the frequency values.
     num_properties_ = 0;
     for (int i = 0; i < num_docs_; ++i) {
-      num_properties_ += frequencies[i];
+      num_properties_ += min(frequencies[i], static_cast<uint32_t> (ChunkEncoder::kMaxProperties));
     }
   }
 

@@ -94,7 +94,9 @@ void IndexDiff::Diff(const char* term, int term_len) {
       if ((term == NULL && term_len == 0) || (index1_->curr_term_len() == term_len && strncmp(index1_->curr_term(), term, term_len) == 0)) {
         // Check the frequencies and positions for any differences.
         uint32_t curr_frequency1 = index1_->curr_list_data()->GetFreq();
+        uint32_t num_positions1 = index1_->curr_list_data()->GetNumDocProperties();
         uint32_t curr_frequency2 = index2_->curr_list_data()->GetFreq();
+        uint32_t num_positions2 = index2_->curr_list_data()->GetNumDocProperties();
 
         if (curr_frequency1 != curr_frequency2) {
           printf("Frequencies differ: index1: %u, index2: %u (Postings from index1 and index2 shown below)\n", curr_frequency1, curr_frequency2);
@@ -110,7 +112,7 @@ void IndexDiff::Diff(const char* term, int term_len) {
           // This is similar to doing a merge on the positions, since they are in sorted order.
           size_t i1 = 0;
           size_t i2 = 0;
-          while (i1 < curr_frequency1 && i2 < curr_frequency2) {
+          while (i1 < num_positions1 && i2 < num_positions2) {
             if (curr_positions1[i1] == curr_positions2[i2]) {
               ++i1;
               ++i2;
@@ -134,8 +136,8 @@ void IndexDiff::Diff(const char* term, int term_len) {
           }
 
           // Get any remaining positions in index1, which are missing from index2.
-          if (i1 < curr_frequency1) {
-            while (i1 < curr_frequency1) {
+          if (i1 < num_positions1) {
+            while (i1 < num_positions1) {
               printf("(%d, '", WhichIndex(index1_));
               for (int i = 0; i < index1_->curr_term_len(); ++i) {
                 printf("%c", index1_->curr_term()[i]);
@@ -148,8 +150,8 @@ void IndexDiff::Diff(const char* term, int term_len) {
           }
 
           // Get any remaining positions in index2, which are missing in index1.
-          if (i2 < curr_frequency2) {
-            while (i2 < curr_frequency2) {
+          if (i2 < num_positions2) {
+            while (i2 < num_positions2) {
               printf("(%d, '", WhichIndex(index2_));
               for (int i = 0; i < index2_->curr_term_len(); ++i) {
                 printf("%c", index2_->curr_term()[i]);
@@ -215,9 +217,10 @@ void IndexDiff::Print(Index* index, const char* term, int term_len) {
 
     if (includes_positions_) {
       const uint32_t* curr_positions = index->curr_list_data()->curr_chunk_decoder().current_positions();
-      for (size_t i = 0; i < curr_frequency; ++i) {
+      uint32_t num_positions = index->curr_list_data()->GetNumDocProperties();
+      for (size_t i = 0; i < num_positions; ++i) {
         printf("%u", curr_positions[i]);
-        if (i != (curr_frequency - 1))
+        if (i != (num_positions - 1))
           printf(", ");
       }
     }

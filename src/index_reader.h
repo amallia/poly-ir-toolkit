@@ -303,6 +303,9 @@ public:
   // Returns the frequency for the current docID.
   uint32_t GetFreq();
 
+  // Returns the number of per document properties (e.g. number of positions) for the current docID.
+  uint32_t GetNumDocProperties();
+
   // Returns the next docID that has a score greater than 'min_score'. Skips ahead by blocks.
   uint32_t NextGreaterBlockScore(float min_score);
 

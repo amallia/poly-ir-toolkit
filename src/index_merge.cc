@@ -60,10 +60,22 @@ using namespace std;
  *
  **************************************************************************************************************************************************************/
 IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const IndexFiles& out_index_files) :
-  out_index_files_(out_index_files), index_builder_(NULL), includes_contexts_(true), includes_positions_(true), doc_id_compressor_(CodingPolicy::kDocId),
-      frequency_compressor_(CodingPolicy::kFrequency), position_compressor_(CodingPolicy::kPosition), block_header_compressor_(CodingPolicy::kBlockHeader),
-      total_num_docs_(0), total_unique_num_docs_(0), total_document_lengths_(0), document_posting_count_(0), index_posting_count_(0),
-      first_doc_id_in_index_(0), last_doc_id_in_index_(0) {
+  out_index_files_(out_index_files),
+  index_builder_(NULL),
+  includes_contexts_(true),
+  includes_positions_(true),
+  remapped_index_(false),
+  doc_id_compressor_(CodingPolicy::kDocId),
+  frequency_compressor_(CodingPolicy::kFrequency),
+  position_compressor_(CodingPolicy::kPosition),
+  block_header_compressor_(CodingPolicy::kBlockHeader),
+  total_num_docs_(0),
+  total_unique_num_docs_(0),
+  total_document_lengths_(0),
+  document_posting_count_(0),
+  index_posting_count_(0),
+  first_doc_id_in_index_(0),
+  last_doc_id_in_index_(0) {
   coding_policy_helper::LoadPolicyAndCheck(doc_id_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingDocIdCoding), "docID");
   coding_policy_helper::LoadPolicyAndCheck(frequency_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingFrequencyCoding), "frequency");
   coding_policy_helper::LoadPolicyAndCheck(position_compressor_, Configuration::GetConfiguration().GetValue(config_properties::kMergingPositionCoding), "position");
@@ -86,30 +98,69 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
     if (!index_reader->includes_positions())
       includes_positions_ = false;
 
+    // Remapped indices are special in that certain parameters in the meta file are already summed up, and we just need to pass them through to the final merged
+    // index. We should be able to choose to use the parameter from any of the meta files as they must be the same.
+    KeyValueStore::KeyValueResult<long int> remapped_index_res = index_reader->meta_info().GetNumericalValue(meta_properties::kRemappedIndex);
+    if (!remapped_index_res.error() && remapped_index_res.value_t()) {
+      remapped_index_ = true;
+    }
+
     string total_num_docs = index_reader->meta_info().GetValue(meta_properties::kTotalNumDocs);
     if (total_num_docs.size() > 0) {
-      total_num_docs_ += atol(total_num_docs.c_str());
+      if (!remapped_index_) {
+        total_num_docs_ += atol(total_num_docs.c_str());
+      } else {
+        if (total_num_docs_ > 0 && total_num_docs_ != atol(total_num_docs.c_str())) {
+          GetErrorLogger().Log("Remapped index meta file '" + curr_index_files.meta_info_filename() + "' is inconsistent with the '"
+              + string(meta_properties::kTotalNumDocs) + "' value from the previous remapped index meta file.", true);
+        }
+        total_num_docs_ = atol(total_num_docs.c_str());
+      }
     } else {
       GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kTotalNumDocs) + "' value.", false);
     }
 
     string total_unique_num_docs = index_reader->meta_info().GetValue(meta_properties::kTotalUniqueNumDocs);
     if (total_unique_num_docs.size() > 0) {
-      total_unique_num_docs_ += atol(total_unique_num_docs.c_str());
+      if (!remapped_index_) {
+        total_unique_num_docs_ += atol(total_unique_num_docs.c_str());
+      } else {
+        if (total_unique_num_docs_ > 0 && total_unique_num_docs_ != atol(total_unique_num_docs.c_str())) {
+          GetErrorLogger().Log("Remapped index meta file '" + curr_index_files.meta_info_filename() + "' is inconsistent with the '"
+              + string(meta_properties::kTotalUniqueNumDocs) + "' value from the previous remapped index meta file.", true);
+        }
+        total_unique_num_docs_ = atol(total_unique_num_docs.c_str());
+      }
     } else {
       GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kTotalUniqueNumDocs) + "' value.", false);
     }
 
     string total_document_lengths = index_reader->meta_info().GetValue(meta_properties::kTotalDocumentLengths);
     if (total_document_lengths.size() > 0) {
-      total_document_lengths_ += atol(total_document_lengths.c_str());
+      if (!remapped_index_) {
+        total_document_lengths_ += atol(total_document_lengths.c_str());
+      } else {
+        if (total_document_lengths_ > 0 && total_document_lengths_ != static_cast<uint64_t>(atol(total_document_lengths.c_str()))) {
+          GetErrorLogger().Log("Remapped index meta file '" + curr_index_files.meta_info_filename() + "' is inconsistent with the '"
+              + string(meta_properties::kTotalDocumentLengths) + "' value from the previous remapped index meta file.", true);
+        }
+        total_document_lengths_ = atol(total_document_lengths.c_str());
+      }
     } else {
       GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kTotalDocumentLengths) + "' value.", false);
     }
 
     string document_posting_count = index_reader->meta_info().GetValue(meta_properties::kDocumentPostingCount);
     if (document_posting_count.size() > 0) {
-      document_posting_count_ += atol(document_posting_count.c_str());
+      if (!remapped_index_) {
+        document_posting_count_ += atol(document_posting_count.c_str());
+      } else {
+        if (document_posting_count_ > 0 && document_posting_count_ != static_cast<uint64_t>(atol(document_posting_count.c_str()))) {
+          GetErrorLogger().Log("Remapped index meta file '" + curr_index_files.meta_info_filename() + "' is inconsistent with the '"
+              + string(meta_properties::kDocumentPostingCount) + "' value from the previous remapped index meta file.", true);
+        }
+        document_posting_count_ = atol(document_posting_count.c_str());
+      }
     } else {
       GetErrorLogger().Log("Index meta file '" + curr_index_files.meta_info_filename() + "' missing the '" + string(meta_properties::kDocumentPostingCount) + "' value.", false);
     }
@@ -211,8 +262,9 @@ void IndexMerger::MergeOneHeap() {
 
       if (includes_positions_) {
         const uint32_t* curr_positions = top_list->curr_list_data()->curr_chunk_decoder().current_positions();
+        uint32_t num_positions = top_list->curr_list_data()->GetNumDocProperties();
         // Copy the positions.
-        for (size_t i = 0; i < curr_frequency; ++i) {
+        for (uint32_t i = 0; i < num_positions; ++i) {
           positions[properties_offset + i] = curr_positions[i];
         }
       }
@@ -227,12 +279,11 @@ void IndexMerger::MergeOneHeap() {
 
       frequencies[doc_ids_offset] = curr_frequency;
       ++doc_ids_offset;
-      properties_offset += curr_frequency;
+      properties_offset += min(curr_frequency, static_cast<uint32_t> (ChunkEncoder::kMaxProperties));
 
       if (doc_ids_offset == ChunkEncoder::kChunkSize) {
-        ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
-                                           doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
-                                           position_compressor_);
+        ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                           properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
         prev_chunk_last_doc_id = chunk.last_doc_id();
         index_builder_->Add(chunk, curr_term, curr_term_len);
 
@@ -253,9 +304,8 @@ void IndexMerger::MergeOneHeap() {
     } else {
       // A new list found, so we have to dump the chunk from the previous list, if any.
       if (doc_ids_offset > 0) {
-        ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
-                                           doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
-                                           position_compressor_);
+        ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                           properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
         index_builder_->Add(chunk, curr_term, curr_term_len);
       }
 
@@ -280,7 +330,7 @@ void IndexMerger::MergeOneHeap() {
   // Leftover chunk.
   if (doc_ids_offset > 0) {
     ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
-                                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
+                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
     index_builder_->Add(chunk, curr_term, curr_term_len);
   }
 
@@ -387,8 +437,9 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
     uint32_t curr_frequency = top_list->curr_list_data()->GetFreq();
     if (includes_positions_) {
       const uint32_t* curr_positions = top_list->curr_list_data()->curr_chunk_decoder().current_positions();
+      uint32_t num_positions = top_list->curr_list_data()->GetNumDocProperties();
       // Copy the positions.
-      for (size_t i = 0; i < curr_frequency; ++i) {
+      for (uint32_t i = 0; i < num_positions; ++i) {
         positions[properties_offset + i] = curr_positions[i];
       }
     }
@@ -403,12 +454,11 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
 
     frequencies[doc_ids_offset] = curr_frequency;
     ++doc_ids_offset;
-    properties_offset += curr_frequency;
+    properties_offset += min(curr_frequency, static_cast<uint32_t> (ChunkEncoder::kMaxProperties));
 
     if (doc_ids_offset == ChunkEncoder::kChunkSize) {
-      ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL),
-                                         doc_ids_offset, properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_,
-                                         position_compressor_);
+      ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
+                         properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
       prev_chunk_last_doc_id = chunk.last_doc_id();
       index_builder_->Add(chunk, term, term_len);
 
@@ -431,7 +481,7 @@ void IndexMerger::MergeLists(Index** posting_heap, int posting_heap_size, const 
   // Leftover chunk.
   if (doc_ids_offset > 0) {
     ChunkEncoder chunk(doc_ids, frequencies, (includes_positions_ ? positions : NULL), (includes_contexts_ ? contexts : NULL), doc_ids_offset,
-                                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
+                       properties_offset, prev_chunk_last_doc_id, doc_id_compressor_, frequency_compressor_, position_compressor_);
     index_builder_->Add(chunk, term, term_len);
   }
 }
@@ -440,8 +490,7 @@ void IndexMerger::WriteMetaFile() {
   KeyValueStore index_metafile;
   ostringstream metafile_values;
 
-  // TODO: Need to write the document offset to be used for the true docIDs in the index.
-  // This will allow us to store smaller docIDs (for the non-gap-coded ones, anyway) resulting in better compression.
+  index_metafile.AddKeyValuePair(meta_properties::kRemappedIndex, Stringify(remapped_index_));
 
   metafile_values << includes_positions_;
   index_metafile.AddKeyValuePair(meta_properties::kIncludesPositions, metafile_values.str());

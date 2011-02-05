@@ -115,7 +115,7 @@ void ChunkDecoder::DecodePositions(const CodingPolicy& position_decompressor) {
   // Count the number of positions we have in total by summing up all the frequencies.
   for (int i = 0; i < num_docs_; ++i) {
     assert(frequencies_[i] != 0);  // This condition indicates a bug in the program.
-    num_positions_ += frequencies_[i];
+    num_positions_ += min(frequencies_[i], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
   }
 
   assert(num_positions_ <= (ChunkDecoder::kChunkSize * ChunkDecoder::kMaxProperties));
@@ -130,7 +130,7 @@ void ChunkDecoder::UpdatePropertiesOffset() {
   assert(decoded_properties_ == true);
   for (int i = prev_document_offset_; i < curr_document_offset_; ++i) {
     assert(frequencies_[i] != 0);  // This indicates a bug in the program.
-    curr_position_offset_ += frequencies_[i];
+    curr_position_offset_ += min(frequencies_[i], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
   }
   prev_document_offset_ = curr_document_offset_;
 }
@@ -304,18 +304,21 @@ int ListData::GetList(RetrieveDataType data_type, uint32_t* index_data, int inde
   int curr_index_data_idx = 0;
   uint32_t next_doc_id = 0;
 
+  uint32_t i;
   uint32_t curr_doc_id;
   uint32_t curr_frequency;
+  uint32_t curr_num_positions;
   const uint32_t* curr_positions;
 
   // Necessary for positions. If we have started decoding the list (on the previous call to this function)
   // but stopped because we couldn't copy all the positions, copy them now.
   if (data_type == kPosition && curr_chunk_decoder_.decoded_doc_ids()) {
     curr_frequency = GetFreq();
+    curr_num_positions = GetNumDocProperties();
     curr_positions = curr_chunk_decoder_.current_positions();
-    if (static_cast<int> (curr_frequency) <= index_data_size) {
+    if (static_cast<int> (curr_num_positions) <= index_data_size) {
       // Copy the positions.
-      for (size_t i = 0; i < curr_frequency; ++i) {
+      for (i = 0; i < curr_num_positions; ++i) {
         index_data[curr_index_data_idx++] = curr_positions[i];
       }
     } else {
@@ -341,12 +344,13 @@ int ListData::GetList(RetrieveDataType data_type, uint32_t* index_data, int inde
 
       case kPosition:
         curr_frequency = GetFreq();
+        curr_num_positions = GetNumDocProperties();
         curr_positions = curr_chunk_decoder_.current_positions();
 
         // We need to make sure we don't consume positions unless *all* of them fit into the supplied array.
-        if (static_cast<int> (curr_index_data_idx + curr_frequency) <= index_data_size) {
+        if (static_cast<int> (curr_index_data_idx + curr_num_positions) <= index_data_size) {
           // Copy the positions.
-          for (size_t i = 0; i < curr_frequency; ++i) {
+          for (i = 0; i < curr_num_positions; ++i) {
             index_data[curr_index_data_idx++] = curr_positions[i];
           }
         } else {
@@ -376,6 +380,7 @@ int ListData::GetList(RetrieveDataType data_type, uint32_t* index_data, int inde
 int ListData::LoopOverList(RetrieveDataType data_type) {
   int k;
   uint32_t curr_frequency;
+  uint32_t curr_num_positions;
 
   int count = 0;
 
@@ -403,8 +408,9 @@ int ListData::LoopOverList(RetrieveDataType data_type) {
           case kPosition:
             curr_chunk_decoder_.set_curr_document_offset(k);  // Offset for the frequency.
             curr_frequency = GetFreq();
+            curr_num_positions = GetNumDocProperties();
             curr_chunk_decoder_.current_positions();
-            count += curr_frequency;
+            count += curr_num_positions;
             break;
 
           default:
@@ -562,6 +568,10 @@ uint32_t ListData::GetFreq() {
   }
 
   return curr_chunk_decoder_.current_frequency();
+}
+
+uint32_t ListData::GetNumDocProperties() {
+  return min(GetFreq(), static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
 }
 
 uint32_t ListData::NextGreaterBlockScore(float min_score) {
@@ -1119,7 +1129,6 @@ IndexReader::IndexReader(Purpose purpose, CacheManager& cache_manager, const cha
   //       (because that would require updating the index meta file generation in some places, which should be done eventually).
   KeyValueStore::KeyValueResult<long int> remapped_index_res = meta_info_.GetNumericalValue(meta_properties::kRemappedIndex);
   if (!remapped_index_res.error() && remapped_index_res.value_t()) {
-    cout << "Loading document map translation table." << endl;
     document_map_.LoadRemappingTranslationTable("url_sorted_doc_id_mapping");
   }
 }

@@ -76,9 +76,10 @@ void IndexCat::Cat(const char* term, int term_len) {
 
         if (includes_positions_) {
           const uint32_t* curr_positions = index_->curr_list_data()->curr_chunk_decoder().current_positions();
-          for (size_t i = 0; i < curr_frequency; ++i) {
+          uint32_t num_positions = index_->curr_list_data()->GetNumDocProperties();
+          for (size_t i = 0; i < num_positions; ++i) {
             printf("%u", curr_positions[i]);
-            if (i != (curr_frequency - 1))
+            if (i != (num_positions - 1))
               printf(", ");
           }
         }

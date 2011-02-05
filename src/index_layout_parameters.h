@@ -45,6 +45,7 @@
 // Store a maximum of MAX_FREQUENCY_PROPERTIES positions/contexts for every document in a list, regardless of actual frequency
 // This solves the problem of having very large chunks, that are greater than the BLOCK_SIZE, which is not allowed
 // and minimizes empty space at the end of a block since chunks are small.
+// The actual frequency stored in the index is not limited by this parameter.
 #define MAX_FREQUENCY_PROPERTIES 64
 
 // The lower bound size of a single chunk in bytes (one integer per docID and frequency).

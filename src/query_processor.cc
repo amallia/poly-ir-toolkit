@@ -2257,7 +2257,7 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
   uint32_t did = 0;
   uint32_t d;
 
-  int r, i, j, k, l;
+  int i, j;
 
   // Compute the inverse document frequency component. It is not document dependent, so we can compute it just once for each list.
   int num_docs_t;
@@ -2338,7 +2338,9 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
   }
 
   // Term proximity components.
-  int num_positions_top, num_positions_bottom;
+  int r;
+  uint32_t k, l;
+  uint32_t num_positions_top, num_positions_bottom;
   const uint32_t* positions_top, *positions_bottom;
   uint32_t positions_top_actual, positions_bottom_actual;
   int dist;
@@ -2346,11 +2348,11 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
   for (r = 0; r < kNumReturnedResults; ++r) {
     for (i = 0; i < kNumLists; ++i) {
-      num_positions_top = result_position_tuples[r].positions[i * kResultPositionStride];
+      num_positions_top = min(result_position_tuples[r].positions[i * kResultPositionStride], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
       positions_top = &result_position_tuples[r].positions[i * kResultPositionStride + 1];
 
       for (j = i + 1; j < kNumLists; ++j) {
-        num_positions_bottom = result_position_tuples[r].positions[j * kResultPositionStride];
+        num_positions_bottom = min(result_position_tuples[r].positions[j * kResultPositionStride], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
         positions_bottom = &result_position_tuples[r].positions[j * kResultPositionStride + 1];
 
         positions_top_actual = 0;  // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
@@ -2383,7 +2385,7 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
     for (j = 0; j < kNumLists; ++j) {
       cout << "Positions for list: " << j << endl;
       const uint32_t* positions = &result_position_tuples[i].positions[j * kResultPositionStride];
-      int num_positions = positions[0];
+      uint32_t num_positions = min(positions[0], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
       ++positions;
       for (k = 0; k < num_positions; ++k) {
         cout << positions[k] << endl;
