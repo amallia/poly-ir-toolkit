@@ -33,17 +33,13 @@
 #include <cerrno>
 #include <cstring>
 
+#include <fstream>
+#include <limits>
+
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
-
-#ifdef DOCUMENT_MAP_DEBUG
-#include <iostream>
-#endif
-
-#include <fstream>
-#include <limits>
 
 #include "globals.h"
 #include "logger.h"

@@ -73,9 +73,12 @@
 //#define DOCUMENT_MAP_DEBUG
 
 #include <cassert>
-#include <stdint.h>
 #include <cstdlib>
+#include <stdint.h>
 
+#ifdef DOCUMENT_MAP_DEBUG
+#include <iostream>
+#endif
 #include <string>
 
 /**************************************************************************************************************************************************************
@@ -132,7 +135,7 @@ private:
 struct DocMapEntry {
   int doc_len;                 // The length, in words, of the current docID.
   off_t extended_file_offset;  // The offset into the extended document map file for the current docID.
-};
+}__attribute__((__packed__));  // Without the packed attribute, g++ was adding an extra 4 bytes worth of padding. We want this as small as possible.
 
 /**************************************************************************************************************************************************************
  * DocumentMapWriter
