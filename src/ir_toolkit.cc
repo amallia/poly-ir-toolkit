@@ -28,13 +28,6 @@
 //
 // Contains 'main'. Starting point for exploring the program.
 //
-// High Priority:
-// TODO: Implement parallel indexing capability. Have command line options to specify the number of processes we want and fork off several irtk processes.
-//       Each process should create a unique folder for outputting index files (perhaps using the pid for the folder name).
-//       The parent that sets this up can split the files to index for each child process and pipe them into each child (through I/O redirection) and then die.
-//       Things like merging can be done independently within each folder. The final merge would have to be done by specifying the indices in each folder.
-//       Note that each process would need to record the docID offset for it's index. The final merge would have to take the offsets into account.
-//
 // Minor Improvements:
 // TODO: While doing merging, set the optimized flag that it's a single term query.
 // TODO: If you can't merge files, don't exit, but return an error code, and print a warning message.
@@ -60,11 +53,6 @@
 // TODO: Include the option to use a stop list during indexing (and query time).
 // TODO: Would be neat to have an index split class, that would take an index and break it down into manageable pieces; these can then be used for other
 //       I/O efficient operations --- such as merge, layer, etc.
-// TODO: Allow use of document mapping file during indexing and/or merging stages.
-//
-// Notes:
-// The BM25 formula used here modifies the IDF component to always be positive, by adding 1 to the log() function. I found that this is especially necessary
-// during the implementation of the TAAT with early termination query processing mode.
 //==============================================================================================================================================================
 
 #include "ir_toolkit.h"
@@ -248,7 +236,7 @@ void IndexCollection() {
   // Start timing indexing process.
   Timer index_time;
   collection_indexer.ParseTrec();
-  GetDefaultLogger().Log("Time Elapsed: " + Stringify(index_time.GetElapsedTime()), false);
+  GetDefaultLogger().Log("Time Elapsed: " + Stringify(index_time.GetElapsedTime()) + " seconds", false);
 
   collection_indexer.OutputDocumentCollectionDocIdRanges(document_collections_doc_id_ranges_filename);
 
@@ -541,8 +529,7 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
   delete cache_policy;
 }
 
-// TODO: Name of map should be specified on command line with option.
-//       Name of index should probably be specified as command option as well.
+// TODO: Would be useful to be able to specify the name of the remapped index to be output on the command line.
 void RemapIndexDocIds(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename) {
   IndexRemapper index_remapper(IndexFiles(index_filename, lexicon_filename, doc_map_filename, meta_info_filename), "index_remapped");
   index_remapper.GenerateMap(command_line_args.doc_mapping_file);
