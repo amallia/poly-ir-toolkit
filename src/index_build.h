@@ -44,9 +44,6 @@
 /**************************************************************************************************************************************************************
  * InvertedListMetaData
  *
- * TODO: If we ever move the block headers to the front of the list (optimization, also allows multilevel skip list, by indexing the block headers).
- *       Will need a pointer to the start of the block headers, plus a pointer to the start of the actual list data (for OR/single word queries) for when we
- *       don't need to decode block headers.
  **************************************************************************************************************************************************************/
 class InvertedListMetaData {
 public:
@@ -166,14 +163,15 @@ private:
   int term_len_;
 
   const static int kMaxLayers = MAX_LIST_LAYERS;  // The max number of layers we support.
-  int num_layers_;                                // Used to keep track of the current layer we're processing info for; at the end, will hold the number of layers we have for a particular inverted list.
+  int num_layers_;                                // Used to keep track of the current layer we're processing info for;
+                                                  // at the end, will hold the number of layers we have for a particular inverted list.
   int num_docs_[kMaxLayers];
   int num_chunks_[kMaxLayers];
   int num_chunks_last_block_[kMaxLayers];
   int num_blocks_[kMaxLayers];
   int block_numbers_[kMaxLayers];
   int chunk_numbers_[kMaxLayers];
-  float score_thresholds_[kMaxLayers];            // If our index is only single layered throughout, this field is not useful, so we can save some memory and not load it.
+  float score_thresholds_[kMaxLayers];
   uint32_t external_index_offsets_[kMaxLayers];   // The integer offset into the external index where data for the current term layer starts.
 };
 
