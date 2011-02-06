@@ -2557,7 +2557,7 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
         case kTrec:
           if (!silent_mode_)
             cout << qid << '\t' << "Q0" << '\t' << index_reader_.document_map().GetDocumentNumber(ranked_results[i].second) << '\t' << i << '\t'
-                << ranked_results[i].first << '\t' << "STANDARD" << "\n";
+                << ranked_results[i].first << '\t' << "PolyIRTK" << "\n";
           break;
         case kCompare:
           cout << setprecision(2) << setw(2) << ranked_results[i].first << "\t" << ranked_results[i].second << "\n";
