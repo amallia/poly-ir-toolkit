@@ -33,6 +33,9 @@
 // The document map is loaded into memory as an array, indexed by the docID. We only load the document lengths and an offset (into the document map file) or a
 // pointer to the additional document information in main memory.
 //
+// We assume that the remapped docIDs will be in the same exact range as the original docIDs and there is a one to one correspondence between the remapped and
+// original docIDs.
+//
 //
 // We will always keep the document lengths as well as the integer offset into another file that holds additional document info in main memory
 // (they don't take up much memory) and are used often. This other file will store the corresponding docID, the url length, the url, the docno length, and
@@ -196,12 +199,7 @@ public:
   ~DocumentMapReader();
 
   int GetDocumentLength(uint32_t doc_id) const {
-    if (doc_id_map_ != NULL) {
-      // TODO: Build another table so we don't need another layer of redirection. For now, we leave it be.
-      return basic_doc_map_buffer_[doc_id_map_[doc_id]].doc_len;
-    } else {
-      return basic_doc_map_buffer_[doc_id].doc_len;
-    }
+    return basic_doc_map_buffer_[doc_id].doc_len;
   }
 
   void LoadRemappingTranslationTable(const char* doc_id_map_filename);
@@ -223,10 +221,6 @@ private:
 
   int basic_doc_map_buffer_size_;
   DocMapEntry* basic_doc_map_buffer_;
-
-  // Used when the index has been remapped. Thus, we need this translation layer for docIDs.
-  uint32_t* doc_id_map_;
-  uint32_t doc_id_map_size_;
 };
 
 #endif /* DOCUMENT_MAP_H_ */
