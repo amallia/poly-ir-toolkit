@@ -26,47 +26,37 @@
 //==============================================================================================================================================================
 // Author(s): Roman Khmelichek
 //
-// Document reordering will only take place once we have a complete index ready. We will not be doing document reordering while indexing.
-// Due to docID remapping, there could be gaps in the document map, and those will be filled by dummy entries.
-// Format of the document map will include the actual docID followed by the document length, followed by the URL length, followed by the URL, followed by
-// the document number length, followed by the document number.
-// The document map is loaded into memory as an array, indexed by the docID. We only load the document lengths and an offset (into the document map file) or a
-// pointer to the additional document information in main memory.
+// First, a note on reordered/remapped indices:
+// The document reordering/remapping will only take place once we have a complete index ready. We will not be doing document reordering while indexing.
+// Further, for reordered indices, we assume that there will be no gaps in the reordered docIDs because there will be a one to one correspondence between the
+// original docIDs and the remapped docIDs. We also assume that the remapped docIDs will be in the same exact range as the original docIDs.
+// Having said that, in order to implement the document map for the reordered indices, we'll be using the original file used to remap the docIDs, and remap the
+// original document map in main memory.
 //
-// We assume that the remapped docIDs will be in the same exact range as the original docIDs and there is a one to one correspondence between the remapped and
-// original docIDs.
+// Notes on the document map implementation:
+// The document map consists of two files. The basic (index.dmap_basic) and extended (index.dmap_extended) document maps. The basic document map only holds the
+// document lengths and extended offsets; the extended offset is to the start of the document information in the extended document map.
+// The extended document map holds the URLs and document numbers (for TREC experiments).
+// The basic document map is designed to be fully in memory; the document lengths are necessary for BM25 score computation, so access must be fast. The extended
+// information is used only for the final top-k documents and is not timed during query runs, so we can afford to go to disk k times.
+// Currently, no compression is used on the extended document map, so it could take up a bit of space. Compression for the basic document map is generally not
+// necessary, since it's already small.
 //
-//
-// We will always keep the document lengths as well as the integer offset into another file that holds additional document info in main memory
-// (they don't take up much memory) and are used often. This other file will store the corresponding docID, the url length, the url, the docno length, and
-// the docno. This info will not be loaded into main memory by default since it's expected to take a large amount of space. We only need this info for looking
-// up the top-k documents, so k seeks into the file are OK.
-//
-// The main document map file will store the docID, the document length, and the integer offset into the docmap_info file. We store docIDs in case we do
-// document reordering, which can potentially introduce gaps in the docIDs.
-//
+// Future improvements to the document map:
 // Sometimes, we would like to store everything in main memory (i.e. the document URLs). To conserve main memory, we can employ compression (i.e. gzip) on
 // the URLs; however this is most effective when we compress several URLs ("bunches" of URLs) together to exploit their common attributes.
-// For this, we'll load up the URLs and compress bunches of them, storing the compressed data into a large in memory array. Also, any missing docIDs (for
-// instance, due to docID reordering) will receive dummy entries. In main memory, for each of n bunches, we'll store an offset/pointer into the array.
-// From this info, and docID URL can be found by decompressing a few of the URLs and then offsetting to the correct one.
+// For this, we'll load up the URLs and compress bunches of them, storing the compressed data into a large in memory array.
+// In main memory, for each of n bunches, we'll store an offset/pointer to each compressed bunch in a table of size ceil(num_docs / n).
+// From this info, any docID URL can be found by decompressing a bunch (size n) of the URLs and then offsetting to the correct one (doc_id % n).
 //
-// In order to construct these compressed in-memory URL array, the URLs corresponding to the docIDs have to be in monotonically increasing docID order, which
-// might not be the case due to docID reordering. So, to avoid making many seeks into the URLs file (which would take VERY long for millions of docIDs)
-// and not loading the complete file in main memory (which it might not fit), we would sort the <docID, offset> tuples by the offset. Now, we could load up
-// the URLs file contiguously, getting tuples of <offset, URL>. Now, we could create <docID, offset, URL> tuples, which would be ordered by increasing offset,
-// but non-specified docID order. From here on, we'll do an I/O efficient merge-sort, so we can get a new URLs file, now ordered by docIDs and we can get a
-// new file with the proper docIDs and offsets.
-//
-//
-//
-// TODO: Some ideas:
-//     * When doing an index merge/docID reordering/index layering and similar, we access the document map sequentially per term. So for long lists,
-//       we can conserve memory by reading the document map in blocks of some fixed size.
-//     * We'll need to pre allocate an array for the new full document map in memory because we'll be accessing it all over the place
-//       (due to the reordered docs) and we'll just fill it in.
-//     * To compress the extended doc map file: Compress n entries at a time. Then, can have table, size ceil[num_docs/n], describing the offsets.
-//       This won't be compatible with remapping, because of possible docID gaps.
+// Constructing an in-memory compressed document map for the case of a reordered index takes more work, as roughly described below.
+// In order to construct this compressed in-memory URL array, the URLs corresponding to the docIDs have to be in monotonically increasing docID order, which
+// is not the case due to docID reordering. So, to avoid making many random seeks into the extended document map file (which would take VERY long for millions
+// of docIDs) and not loading the complete file in main memory (it might not fit), we would sort the <docID, doc_len, offset> tuples from the basic document map
+// by the offsets. Then, load up the extended document map file contiguously, getting tuples of <offset, URL>. By merging, we could create
+// <docID, doc_len, offset, URL> tuples, which would be ordered by ascending offsets, but non-specified docID order. From here on, we'll do an I/O efficient
+// merge-sort, so we can get a new extended document map file, now ordered by docIDs and we will also get a new basic document map, with the new offsets (might
+// as well also remap the docIDs at this step). This file would be suitable for in-memory compression as described above.
 //==============================================================================================================================================================
 
 #ifndef DOCUMENT_MAP_H_
@@ -87,7 +77,7 @@
 /**************************************************************************************************************************************************************
  * DocumentDynamicEntriesPool
  *
- * TODO: Currently not used.
+ * TODO: Currently not used. Might be useful if we want all the extended document data (like URLs) in main memory.
  **************************************************************************************************************************************************************/
 class DocumentDynamicEntriesPool {
 public:
