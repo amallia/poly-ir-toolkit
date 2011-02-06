@@ -2584,14 +2584,14 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
 // This is because our query processor only supports AND queries; a query that contains terms which are not in the lexicon will just terminate
 // with 0 results and 0 running time, so we ignore these for our benchmarking purposes.
 void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries) {
-  vector<string> queries;
+  vector<pair<int, string> > queries;
   string query_line;
   while (getline(is, query_line)) {
     size_t colon_pos = query_line.find(':');
     if (colon_pos != string::npos && colon_pos < (query_line.size() - 1)) {
-      queries.push_back(query_line.substr(colon_pos + 1));
+      queries.push_back(make_pair(atoi(query_line.substr(0, colon_pos).c_str()), query_line.substr(colon_pos + 1)));
     } else {
-      queries.push_back(query_line);
+      queries.push_back(make_pair(0, query_line));
     }
   }
 
@@ -2605,9 +2605,9 @@ void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries)
   warm_up_mode_ = true;
   for (int i = 0; i < num_warm_up_queries; ++i) {
 #ifdef IRTK_DEBUG
-    cout << queries[i] << endl;
+    cout << queries[i].first << ":" << queries[i].second << endl;
 #endif
-    ExecuteQuery(queries[i], 0);
+    ExecuteQuery(queries[i].second, queries[i].first);
   }
 
   index_reader_.ResetStats();
@@ -2616,9 +2616,9 @@ void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries)
   warm_up_mode_ = false;
   for (int i = num_warm_up_queries; i < static_cast<int> (queries.size()); ++i) {
 #ifdef IRTK_DEBUG
-    cout << queries[i] << endl;
+    cout << queries[i].first << ":" << queries[i].second << endl;
 #endif
-    ExecuteQuery(queries[i], 0);
+    ExecuteQuery(queries[i].second, queries[i].first);
   }
 }
 
