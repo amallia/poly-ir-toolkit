@@ -121,6 +121,7 @@ LayeredIndexGenerator::LayeredIndexGenerator(const IndexFiles& input_index_files
   if (num_layers_ <= 0 || num_layers_ > MAX_LIST_LAYERS) {
     Configuration::ErroneousValue(config_properties::kNumLayers, Stringify(num_layers_));
   }
+  layering_strategy_ = Configuration::GetResultValue(Configuration::GetConfiguration().GetStringValue(config_properties::kLayeringStrategy));
 
   assert(includes_positions_ == false);  // TODO: We don't support layered indices with positions yet.
 }
@@ -141,29 +142,42 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   const int kMaxLayers = MAX_LIST_LAYERS;
 
   // TODO: Need a strategy that uses the IDF to split list into layers, so that only the top scoring documents are in the upper layers.
-  // The parameters for the strategies should be included in config file, and which strategy to use by default.
 
   // We implement three different layer splitting strategies:
-  // * Split layers by percentage.
-  // * Split layers by percentage, limited by some max size for each layer.
-  // * Split by exponentially increasing bucket sizes (based on the Anh/Moffat way of splitting, although they did this on a document level basis).
-  // Each layer (except the last) will have at least 128 documents.
+  // * kPercentageLowerBounded: split layers by percentage, with a lowerbound size for each layer.
+  // * kPercentageLowerUpperBounded: split layers by percentage, with lowerbound and upperbound sizes for each layer.
+  // * kExponentiallyIncreasing: split by exponentially increasing bucket sizes, with a lowerbound size for each layer
+  //   This strategy is based on the Anh/Moffat way of splitting, although they did this on a document level basis.
+  // In each strategy, each layer (except possibly the last) will have a lowerbound size of 128 postings, regardless of whether we explicitly define a
+  // lowerbound size. This is to make the most of a chunk, since we'll always be decompressing a whole chunk.
   enum LayerSplitMode {
-    kPercentage, kPercentageFixedBounded, kExponentiallyIncreasing
+    kPercentageLowerBounded, kPercentageLowerUpperBounded, kExponentiallyIncreasing, kUndefined
   };
-//  LayerSplitMode layer_splitting_strategy = kExponentiallyIncreasing;
-  LayerSplitMode layer_splitting_strategy = kPercentageFixedBounded;
+
+  LayerSplitMode layer_splitting_strategy;
+  if (layering_strategy_ == "percentage-lower-bounded") {
+    layer_splitting_strategy = kPercentageLowerBounded;
+  } else if (layering_strategy_ == "percentage-lower-upper-bounded") {
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
+  } else if (layering_strategy_ == "exponentially-increasing") {
+    layer_splitting_strategy = kExponentiallyIncreasing;
+  } else {
+    layer_splitting_strategy = kUndefined;
+    Configuration::ErroneousValue(config_properties::kLayeringStrategy, Stringify(layering_strategy_));
+  }
 
   // If we have overlapping layers, should the threshold score include the overlapping documents?
   // This should generally be set to 'false', since all layers will then have the same threshold stored,
   // so if any algorithm desires this effect, it can just use the first layer threshold as the threshold for all subsequent overlapping layers.
   const bool kOverlappingLayerThresholdIncludesAllDocs = false;
 
-  // Some dynamic index layer properties.
-  // TODO: Should be able to define in configuration file.
+  // Additional details for the above layering strategies.
+  // TODO: Should be able to define these in the configuration file.
   int layer_percentages[] = { 5, 5, 10, 15, 25, 40, 0, 0 };
-  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0, 0, 0 };  // Set the max number of postings in each layer, 0 means no limit. Used for 'kPercentageFixedBounded'.
-  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072 };  // Set the min number of postings in each layer, 0 means no limit. Used for 'kExponentiallyIncreasing'.
+  // Set the minimum number of postings in each layer, 0 means no limit.
+  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072 };
+  // Set the maximum number of postings in each layer, 0 means no limit.
+  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0, 0, 0 };
 
   // Test that the index layering properties make sense.
   if (num_layers_ > kMaxLayers) {

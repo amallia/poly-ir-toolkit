@@ -41,6 +41,7 @@
 #ifdef INDEX_LAYERIFY_DEBUG
 #include <iostream>
 #endif
+#include <string>
 
 #include "coding_policy.h"
 #include "document_map.h"
@@ -76,8 +77,11 @@ private:
   // Some index properties.
   bool includes_contexts_;
   bool includes_positions_;
+
+  // Layering settings for the new index to be generated.
   bool overlapping_layers_;
   int num_layers_;
+  std::string layering_strategy_;
 
   // Compressors to be used for various parts of the index.
   CodingPolicy doc_id_compressor_;

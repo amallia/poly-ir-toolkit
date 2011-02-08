@@ -101,6 +101,9 @@ static const char kOverlappingLayers[] = "overlapping_layers";
 // This is subject to 'MAX_LIST_LAYERS' defined in 'index_layout_parameters.h'. It controls the (max) number of layers we should have per list.
 static const char kNumLayers[] = "num_layers";
 
+// Controls the layering strategy. Valid values include 'percentage-lower-bounded', 'percentage-lower-upper-bounded', and 'exponentially-increasing'.
+static const char kLayeringStrategy[] = "layering_strategy";
+
 /**************************************************************************************************************************************************************
  * Querying Parameters
  *
