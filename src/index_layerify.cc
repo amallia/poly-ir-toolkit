@@ -255,10 +255,10 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
       }
 
       switch (layer_splitting_strategy) {
-        case kPercentage:
+        case kPercentageLowerBounded:
           num_postings_curr_layer = (layer_percentages[i] / 100.0) * total_num_postings;
           break;
-        case kPercentageFixedBounded:
+        case kPercentageLowerUpperBounded:
           num_postings_curr_layer = (layer_percentages[i] / 100.0) * total_num_postings;
           if (layer_max_sizes[i] != 0)  // A 0 means that the number of postings for this layer is not bounded.
             num_postings_curr_layer = min(num_postings_curr_layer, layer_max_sizes[i]);
