@@ -89,7 +89,8 @@ LayeredIndexGenerator::LayeredIndexGenerator(const IndexFiles& input_index_files
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, input_index_files.lexicon_filename().c_str(),
-                                              input_index_files.document_map_filename().c_str(), input_index_files.meta_info_filename().c_str(), false);
+                                              input_index_files.document_map_basic_filename().c_str(), input_index_files.document_map_extended_filename().c_str(),
+                                              input_index_files.meta_info_filename().c_str(), false);
 
   // Coding policy for the remapped index remains the same as that of the original index.
   coding_policy_helper::LoadPolicyAndCheck(doc_id_compressor_, index_reader->meta_info().GetValue(meta_properties::kIndexDocIdCoding), "docID");
@@ -135,8 +136,6 @@ LayeredIndexGenerator::~LayeredIndexGenerator() {
 // TODO: Computing BM25 scores during the various sorting stages is expensive. When sorting, we have to do n*log(n) comparisons and thus recompute the
 //       BM25 score more than necessary. We can speedup by precomputing and storing the BM25 scores.
 void LayeredIndexGenerator::CreateLayeredIndex() {
-  GetDefaultLogger().Log("Creating layered index.", false);
-
   // Some static index layer properties.
   const int kLayerMinSize = CHUNK_SIZE;
   const int kMaxLayers = MAX_LIST_LAYERS;
@@ -346,8 +345,6 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   index_builder_->Finalize();
 
   WriteMetaFile(output_index_files_.meta_info_filename());
-
-  GetDefaultLogger().Log("Finished creating layered index.", false);
 }
 
 // This dumps a single list into an index.

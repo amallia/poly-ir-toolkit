@@ -688,8 +688,9 @@ public:
     kRandomQuery, kMerge
   };
 
-  IndexReader(Purpose purpose, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
-              const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader = NULL);
+  IndexReader(Purpose purpose, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_basic_filename,
+              const char* doc_map_extended_filename, const char* meta_info_filename, bool use_positions,
+              const ExternalIndexReader* external_index_reader = NULL);
 
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query = false);
   ListData* OpenList(const LexiconData& lex_data, int layer_num, bool single_term_query, int term_num);

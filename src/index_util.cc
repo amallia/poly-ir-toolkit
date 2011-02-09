@@ -34,6 +34,7 @@
 #include <sstream>
 
 #include "cache_manager.h"
+#include "globals.h"
 #include "index_reader.h"
 using namespace std;
 
@@ -45,7 +46,8 @@ IndexFiles::IndexFiles() :
   prefix_("index"),
   index_filename_(prefix_ + ".idx"),
   lexicon_filename_(prefix_ + ".lex"),
-  document_map_filename_(prefix_ + ".dmap"),
+  document_map_basic_filename_("index.dmap_basic"),
+  document_map_extended_filename_("index.dmap_extended"),
   meta_info_filename_(prefix_ + ".meta"),
   external_index_filename_(prefix_ + ".ext") {
 }
@@ -54,7 +56,8 @@ IndexFiles::IndexFiles(const string& prefix) :
   prefix_(prefix),
   index_filename_(prefix_ + ".idx"),
   lexicon_filename_(prefix_ + ".lex"),
-  document_map_filename_(prefix_ + ".dmap"),
+  document_map_basic_filename_("index.dmap_basic"),
+  document_map_extended_filename_("index.dmap_extended"),
   meta_info_filename_(prefix_ + ".meta"),
   external_index_filename_(prefix_ + ".ext") {
 }
@@ -69,22 +72,6 @@ IndexFiles::IndexFiles(const string& prefix, int group_num, int file_num) :
   InitIndexFiles(prefix_, group_num, file_num);
 }
 
-IndexFiles::IndexFiles(const string& index_filename, const string& lexicon_filename, const string& document_map_filename, const string& meta_info_filename) :
-  index_filename_(index_filename),
-  lexicon_filename_(lexicon_filename),
-  document_map_filename_(document_map_filename),
-  meta_info_filename_(meta_info_filename) {
-}
-
-IndexFiles::IndexFiles(const string& index_filename, const string& lexicon_filename, const string& document_map_filename, const string& meta_info_filename,
-                       const string& external_index_filename) :
-  index_filename_(index_filename),
-  lexicon_filename_(lexicon_filename),
-  document_map_filename_(document_map_filename),
-  meta_info_filename_(meta_info_filename),
-  external_index_filename_(external_index_filename) {
-}
-
 // Assumes that a prefix has been specified.
 void IndexFiles::UpdateNums(int group_num, int file_num) {
   InitIndexFiles(prefix_, group_num, file_num);
@@ -96,32 +83,21 @@ void IndexFiles::SetDirectory(const string& dir) {
   string separator = (dir == "/") ? "" : "/";
   index_filename_ = dir + separator + index_filename_;
   lexicon_filename_ = dir + separator + lexicon_filename_;
-  document_map_filename_ = dir + separator + document_map_filename_;
+  document_map_basic_filename_ = dir + separator + document_map_basic_filename_;
+  document_map_extended_filename_ = dir + separator + document_map_extended_filename_;
   meta_info_filename_ = dir + separator + meta_info_filename_;
   external_index_filename_ = dir + separator + external_index_filename_;
 }
 
 void IndexFiles::InitIndexFiles(const string& prefix, int group_num, int file_num) {
-  ostringstream index_filename;
-  index_filename << prefix << ".idx." << group_num << "." << file_num;
+  string suffix = Stringify(group_num) + "." + Stringify(file_num);
 
-  ostringstream lexicon_filename;
-  lexicon_filename << prefix << ".lex." << group_num << "." << file_num;
-
-  ostringstream document_map_filename;
-  document_map_filename << prefix << ".dmap." << group_num << "." << file_num;
-
-  ostringstream meta_info_filename;
-  meta_info_filename << prefix << ".meta." << group_num << "." << file_num;
-
-  ostringstream external_index_filename;
-  external_index_filename << prefix << ".ext." << group_num << "." << file_num;
-
-  index_filename_ = index_filename.str();
-  lexicon_filename_ = lexicon_filename.str();
-  document_map_filename_ = document_map_filename.str();
-  meta_info_filename_ = meta_info_filename.str();
-  external_index_filename_ = external_index_filename.str();
+  index_filename_ = prefix + ".idx." + suffix;
+  lexicon_filename_ = prefix + ".lex." + suffix;
+  document_map_basic_filename_ = "index.dmap_basic";
+  document_map_extended_filename_ = "index.dmap_extended";
+  meta_info_filename_ = prefix + ".meta." + suffix;
+  external_index_filename_ = prefix + ".ext." + suffix;
 }
 
 /**************************************************************************************************************************************************************

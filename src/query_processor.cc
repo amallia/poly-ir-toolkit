@@ -55,25 +55,27 @@ using namespace std;
  * QueryProcessor
  *
  **************************************************************************************************************************************************************/
-QueryProcessor::QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                               const char* external_index_filename, const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode,
+QueryProcessor::QueryProcessor(const IndexFiles& input_index_files, const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode,
                                ResultFormat result_format) :
   query_algorithm_(query_algorithm),
   query_mode_(query_mode),
   result_format_(result_format),
   max_num_results_(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kMaxNumberResults))),
-  silent_mode_(false),  // TODO: Get from configuration file.
-  warm_up_mode_(false),  // TODO: Get from configuration file.
+  silent_mode_(false),
+  warm_up_mode_(false),
   use_positions_(Configuration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kUsePositions))),
   collection_average_doc_len_(0),
   collection_total_num_docs_(0),
-  external_index_reader_(GetExternalIndexReader(query_algorithm_, external_index_filename)),
-  cache_policy_(((Configuration::GetConfiguration().GetValue(config_properties::kMemoryMappedIndex) == "true") ?
-                  static_cast<CacheManager*> (new MemoryMappedCachePolicy(index_filename)) :
-                  (Configuration::GetConfiguration().GetValue(config_properties::kMemoryResidentIndex) == "true") ?
-                    static_cast<CacheManager*> (new FullContiguousCachePolicy(index_filename)) :
-                    static_cast<CacheManager*> (new LruCachePolicy(index_filename)))),
-  index_reader_(IndexReader::kRandomQuery, *cache_policy_, lexicon_filename, doc_map_filename, meta_info_filename, use_positions_, external_index_reader_),
+  external_index_reader_(GetExternalIndexReader(query_algorithm_, input_index_files.external_index_filename().c_str())),
+  cache_policy_(GetCacheManager(input_index_files.index_filename().c_str())),
+  index_reader_(IndexReader::kRandomQuery,
+                *cache_policy_,
+                input_index_files.lexicon_filename().c_str(),
+                input_index_files.document_map_basic_filename().c_str(),
+                input_index_files.document_map_extended_filename().c_str(),
+                input_index_files.meta_info_filename().c_str(),
+                use_positions_,
+                external_index_reader_),
   index_layered_(false),
   index_overlapping_layers_(false),
   index_num_layers_(1),
@@ -364,17 +366,19 @@ void QueryProcessor::OpenListLayers(LexiconData** query_term_data, int num_query
         ++(*total_num_layers);
         list_data_pointers[i][j] = index_reader_.OpenList(*query_term_data[i], j, *single_term_query, i);
 
-        if (!silent_mode_)
-          cout << "Score threshold for list '" << string(query_term_data[i]->term(), query_term_data[i]->term_len()) << "', layer #" << j << " is: "
-              << query_term_data[i]->layer_score_threshold(j) << ", num_docs: " << query_term_data[i]->layer_num_docs(j) << "\n";
+#ifdef IRTK_DEBUG
+        cout << "Score threshold for list '" << string(query_term_data[i]->term(), query_term_data[i]->term_len()) << "', layer #" << j << " is: "
+            << query_term_data[i]->layer_score_threshold(j) << ", num_docs: " << query_term_data[i]->layer_num_docs(j) << "\n";
+#endif
       } else {
         // For any remaining layers we don't have, we just open up the last layer.
         list_data_pointers[i][j] = index_reader_.OpenList(*query_term_data[i], query_term_data[i]->num_layers() - 1, *single_term_query, i);
       }
     }
 
-    if (!silent_mode_)
-      cout << endl;
+#ifdef IRTK_DEBUG
+    cout << endl;
+#endif
   }
 }
 
@@ -385,12 +389,6 @@ void QueryProcessor::CloseListLayers(int num_query_terms, int max_layers, ListDa
     }
   }
 }
-
-
-/*
- * TODO: for OR semantics, don't need to load block level index and do binary search --- but it is useful when we switch to AND mode...
- * Query 'and armadillo'--- it's odd that we rarely get early termination --- most of the time, we just get speedup from AND processing mode!
- */
 
 // Remember that this technique is not score safe, but it still should be rank safe.
 // Implements approach described by Anh/Moffat with improvements by Strohman/Croft, but with standard BM25 scoring, instead of impacts.
@@ -435,17 +433,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
   max_num_accumulators = min(max_num_accumulators, collection_total_num_docs_);
 //  max_num_docs = min(max_num_docs, collection_total_num_docs_);
-
-//  cout << "MAX NUM DOCS: " << max_num_docs << endl;
-
-
-  /////TODo: DEBUG: process a layer in pure OR mode to check for docID
-//  ListData* my_test_list[1];
-//  my_test_list[0] = list_data_pointers[2][5];
-//  total_num_results = MergeLists(my_test_list, 1, results, kMaxNumResults);
-//  exit(1);
-  //////////////////////////
-
 
   // Sort all the layers by their max score.
   sort(max_score_sorted_list_data_pointers, max_score_sorted_list_data_pointers + total_num_layers, ListLayerMaxScoreCompare());
@@ -614,7 +601,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
     if (early_termination_condition_one) {
       // Sort accumulators in ascending order.
 
-//      cout << "CHECKING 2ND EARLY TERMINATION CONDITION!" << endl;
 
       /*
        * TODO: While in AND mode, we may skip certain accumulators completely (because there is no doc in the intersection),
@@ -624,13 +610,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
 
       sort(accumulators, accumulators + num_accumulators, AccumulatorScoreAscendingCompare());
-
-      ///////////////// TODO: DEBUG!
-//      cout << "NUM ACCUMULATORS: " << num_accumulators << endl;
-//      for (int l = 0; l < min(num_accumulators, 10); ++l) {
-//        cout << "L: " << l << ", " << accumulators[l].curr_score  << ", upperbound remaining: " << << endl;
-//      }
-      ////////////////////////////////////
 
       for (int j = 0; j < num_accumulators - 1; ++j) {
         // TODO: It might be a good idea to store upperbounds in the previous step inside the accumulator instead of recalculating
@@ -642,11 +621,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 //            cout << "missing score from term: " << k << ", upperbound contributions: " << term_upperbounds[k] << endl; // TODO: upperbound contribution shouldn't be 0!!!!
           }
         }
-
-//        if(j < min(num_accumulators, 10)) {
-//          cout << "accum_num: " << j << ", docID: " << accumulators[j].doc_id << ", score: " << accumulators[j].curr_score << ", upperbound: " << acc_upperbound << endl;
-//        }
-//        ////////////////////////////////////
 
         if (accumulators[j].curr_score == accumulators[j+1].curr_score && acc_upperbound > 0) {
           early_termination_condition_two = false;
@@ -732,7 +706,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
   while ((curr_doc_id = list->NextGEQ(curr_doc_id)) < ListData::kNoMoreDocs) {
     // Search for an accumulator corresponding to the current docID or insert if not found.
     while (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id < curr_doc_id) {
-      // TODO: Maintain the threshold score.
+      // Maintain the threshold score.
       // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
       threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
 
@@ -744,19 +718,11 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
     doc_len = index_reader_.document_map().GetDocumentLength(curr_doc_id);
     partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
-
-//    //////////////////////TODO: DEBUG:
-//    if(curr_doc_id == 1201796) {
-//      cout << "Partial score for list with idf: " << idf_t << ", is: " << (partial_bm25_sum) << ", num_docs_t: " << num_docs_t << endl;
-//    }
-//    ////////////////////
-
-
     if (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id == curr_doc_id) { // Found a matching accumulator.
       accumulators[curr_accumulator_idx].curr_score += partial_bm25_sum;
       accumulators[curr_accumulator_idx].term_bitmap |= (1 << list->term_num());
 
-      // TODO: Maintain the threshold score.
+      // Maintain the threshold score.
       // This is for the updated accumulator scores.
       threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
 
@@ -767,7 +733,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
         // Resize accumulator array.
         *accumulators_array_size *= 2;
         Accumulator* new_accumulators = new Accumulator[*accumulators_array_size];
-        // TODO: is memcpy faster here?
+        // TODO: Use memcpy here instead.
         for (int i = 0; i < *num_accumulators; ++i) {
           new_accumulators[i] = accumulators[i];
         }
@@ -776,14 +742,12 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
 
         accumulators = *accumulators_array;
         accumulators_size = *accumulators_array_size;
-
-//        cout << "MADE A COPY!!!" << endl;
       }
       accumulators[*num_accumulators].doc_id = curr_doc_id;
       accumulators[*num_accumulators].curr_score = partial_bm25_sum;
       accumulators[*num_accumulators].term_bitmap = (1 << list->term_num());
 
-      // TODO: Maintain the threshold score.
+      // Maintain the threshold score.
       // This is for the new accumulator scores.
       threshold = KthScore(accumulators[*num_accumulators].curr_score, top_k_scores, num_top_k_scores++, k);
 
@@ -792,7 +756,6 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
 
     ++curr_doc_id;
   }
-
 
   // Sort the accumulator array by docID.
   // Note that we only really need to sort any new accumulators we inserted and merge it with the already sorted part of the array.
@@ -831,14 +794,6 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
   int num_top_k_scores = 0;
   float threshold = 0;
   while (accumulator_offset < num_accumulators) {
-
-//    ///////////////TODO: DEBUG
-//    if(accumulators[accumulator_offset].doc_id == 1201796) {
-//      cout << "FOUND IT!!!!!!!" << endl;
-//    }
-//    ///////////////////////
-
-    ////// TODO: NextGEQOld works correctly, the new one has a bug, doesn't find docID 1201796...
     curr_doc_id = list->NextGEQ(accumulators[accumulator_offset].doc_id);
     if (curr_doc_id == accumulators[accumulator_offset].doc_id) {
       // Compute partial BM25 sum.
@@ -846,30 +801,17 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
       doc_len = index_reader_.document_map().GetDocumentLength(curr_doc_id);
       partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
-//      //////////////////////TODO: DEBUG:
-//      if(curr_doc_id == 1201796) {
-//        cout << "Partial score for list with idf (and mode): " << idf_t << ", is: " << (partial_bm25_sum) << ", num_docs_t: " << num_docs_t << endl;
-//      }
-//      ////////////////////
-
       // Update accumulator with the document score.
       accumulators[accumulator_offset].curr_score += partial_bm25_sum;
       accumulators[accumulator_offset].term_bitmap |= (1 << list->term_num());
 
-      // TODO: Maintain the threshold score.
+      // Maintain the threshold score.
       // This is for the updated accumulator scores.
       threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
     } else {
-      // TODO: Maintain the threshold score.
+      // Maintain the threshold score.
       // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
       threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
-
-
-//      //////////////////////TODO: DEBUG:
-//      if(curr_doc_id == 1201796) {
-//        cout << "(skipping it!!) Partial score for list with idf (and mode): " << idf_t << ", is: " << ", num_docs_t: " << num_docs_t << endl;
-//      }
-//      ////////////////////
     }
 
     ++accumulator_offset;
@@ -2708,6 +2650,19 @@ void QueryProcessor::PrintQueryingParameters() {
   cout << "collection_average_doc_len_: " << collection_average_doc_len_ << endl;
   cout << "Using positions: " << use_positions_ << endl;
   cout << endl;
+}
+
+CacheManager* QueryProcessor::GetCacheManager(const char* index_filename) const {
+  bool memory_mapped_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryMappedIndex), false);
+  bool memory_resident_index = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kMemoryResidentIndex), false);
+
+  if (memory_mapped_index) {
+    return new MemoryMappedCachePolicy(index_filename);
+  } else if (memory_resident_index) {
+    return new FullContiguousCachePolicy(index_filename);
+  } else {
+    return new LruCachePolicy(index_filename);
+  }
 }
 
 const ExternalIndexReader* QueryProcessor::GetExternalIndexReader(QueryAlgorithm query_algorithm, const char* external_index_filename) const {

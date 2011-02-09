@@ -51,6 +51,7 @@
 
 #include "index_layout_parameters.h"
 #include "index_reader.h"
+#include "index_util.h"
 
 /**************************************************************************************************************************************************************
  * QueryProcessor
@@ -97,8 +98,7 @@ public:
     kTrec, kNormal, kCompare, kDiscard
   };
 
-  QueryProcessor(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                 const char* external_index_filename, const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode,
+  QueryProcessor(const IndexFiles& input_index_files, const char* stop_words_list_filename, QueryAlgorithm query_algorithm, QueryMode query_mode,
                  ResultFormat result_format);
   ~QueryProcessor();
 
@@ -138,6 +138,7 @@ public:
   void PrintQueryingParameters();
 
 private:
+  CacheManager* GetCacheManager(const char* index_filename) const;
   const ExternalIndexReader* GetExternalIndexReader(QueryAlgorithm query_algorithm, const char* external_index_filename) const;
 
   QueryAlgorithm query_algorithm_;  // The query algorithm to use. This is also dependent on the type of index we're using.

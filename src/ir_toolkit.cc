@@ -94,6 +94,7 @@
 #include "index_merge.h"
 #include "index_reader.h"
 #include "index_remapper.h"
+#include "index_util.h"
 #include "key_value_store.h"
 #include "logger.h"
 #include "query_processor.h"
@@ -104,20 +105,13 @@ using namespace std;
 struct CommandLineArgs {
   CommandLineArgs() :
     mode(kNoIdea),
-    index1_filename("index.idx"),
-    lexicon1_filename("index.lex"),
-    doc_map1_filename("index.dmap"),
-    meta_info1_filename("index.meta"),
-    external_index1_filename("index.ext"),
-    index2_filename("index.idx"),
-    lexicon2_filename("index.lex"),
-    doc_map2_filename("index.dmap"),
-    meta_info2_filename("index.meta"),
-    external_index2_filename("index.ext"),
     merge_degree(0),
+    output_index_prefix(NULL),
     term(NULL),
     term_len(0),
     in_memory_index(false),
+    memory_mapped_index(false),
+    use_external_index(false),
     doc_mapping_file(NULL),
     query_stop_words_list_file(NULL),
     query_algorithm(QueryProcessor::kDefault),
@@ -126,39 +120,32 @@ struct CommandLineArgs {
   }
 
   ~CommandLineArgs() {
-    delete[] term;
-    delete[] doc_mapping_file;
-    delete[] query_stop_words_list_file;
   }
 
   enum Mode {
     kIndex, kMergeInitial, kMergeInput, kQuery, kRemap, kLayerify, kCat, kDiff, kRetrieveIndexData, kLoopOverIndexData, kNoIdea
   };
 
-  Mode mode;
-  const char* index1_filename;
-  const char* lexicon1_filename;
-  const char* doc_map1_filename;
-  const char* meta_info1_filename;
-  const char* external_index1_filename;
+  IndexFiles index_files1;
+  IndexFiles index_files2;
 
-  const char* index2_filename;
-  const char* lexicon2_filename;
-  const char* doc_map2_filename;
-  const char* meta_info2_filename;
-  const char* external_index2_filename;
+  Mode mode;
 
   int merge_degree;
 
-  char* term;
+  const char* output_index_prefix;
+
+  const char* term;
   int term_len;
 
   bool in_memory_index;
   bool memory_mapped_index;
 
-  char* doc_mapping_file;
+  bool use_external_index;
 
-  char* query_stop_words_list_file;
+  const char* doc_mapping_file;
+
+  const char* query_stop_words_list_file;
 
   QueryProcessor::QueryAlgorithm query_algorithm;
   QueryProcessor::QueryMode query_mode;
@@ -212,21 +199,17 @@ void Init() {
   InstallSignalHandler();
 
 #ifndef NDEBUG
-  cout << "Assertions are enabled." << endl;
+  cout << "Compiled with assertions enabled.\n" << endl;
 #endif
 }
 
-void Query(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-           const char* external_index_filename, const char* stop_words_list_filename, QueryProcessor::QueryAlgorithm query_algorithm,
-           QueryProcessor::QueryMode query_mode, QueryProcessor::ResultFormat result_format) {
-  GetDefaultLogger().Log("Starting query processor with index file '" + Stringify(index_filename) + "', " + "lexicon file '" + Stringify(lexicon_filename)
-      + "', " + "document map file '" + Stringify(doc_map_filename) + "', and " + "meta file '" + Stringify(meta_info_filename) + "'.", false);
-
-  QueryProcessor query_processor(index_filename, lexicon_filename, doc_map_filename, meta_info_filename, external_index_filename, stop_words_list_filename,
-                                 query_algorithm, query_mode, result_format);
+void Query() {
+  GetDefaultLogger().Log("Starting query processor with index '" + command_line_args.index_files1.prefix() + "'.", false);
+  QueryProcessor query_processor(command_line_args.index_files1, command_line_args.query_stop_words_list_file, command_line_args.query_algorithm,
+                                 command_line_args.query_mode, command_line_args.result_format);
 }
 
-void IndexCollection() {
+void Index() {
   GetDefaultLogger().Log("Indexing document collection...", false);
 
   CollectionIndexer& collection_indexer = GetCollectionIndexer();
@@ -248,7 +231,7 @@ void IndexCollection() {
 }
 
 // This performs the merge for the complete index starting from the initial 0.0 indices.
-void MergeInitial(int merge_degree) {
+void MergeInitial() {
   DIR* dir;
   if ((dir = opendir(".")) == NULL) {
     GetErrorLogger().LogErrno("opendir() in MergeInitial(), could not open directory to access files to merge", errno, true);
@@ -269,7 +252,7 @@ void MergeInitial(int merge_degree) {
 
   const int kDefaultMergeDegree = 64;
   const bool kDeleteMergedFiles = Configuration::GetResultValue(Configuration::GetConfiguration().GetBooleanValue(config_properties::kDeleteMergedFiles));
-  CollectionMerger merger(num_indices, (merge_degree <= 0 ? kDefaultMergeDegree : merge_degree), kDeleteMergedFiles);
+  CollectionMerger merger(num_indices, (command_line_args.merge_degree <= 0 ? kDefaultMergeDegree : command_line_args.merge_degree), kDeleteMergedFiles);
 }
 
 // Merges index files specified on the standard input stream.
@@ -386,32 +369,29 @@ void MergeInput() {
   }
 }
 
-void Cat(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename, const char* term, int term_len) {
-  IndexFiles index_files(index_filename, lexicon_filename, doc_map_filename, meta_info_filename);
-  IndexCat index_cat(index_files);
-  index_cat.Cat(term, term_len);
+void Cat() {
+  IndexCat index_cat(command_line_args.index_files1);
+  index_cat.Cat(command_line_args.term, command_line_args.term_len);
 }
 
-void Diff(const char* index1_filename, const char* lexicon1_filename, const char* doc_map1_filename, const char* meta_info1_filename,
-          const char* index2_filename, const char* lexicon2_filename, const char* doc_map2_filename, const char* meta_info2_filename,
-          const char* term, int term_len) {
-  IndexFiles index_files1(index1_filename, lexicon1_filename, doc_map1_filename, meta_info1_filename);
-  IndexFiles index_files2(index2_filename, lexicon2_filename, doc_map2_filename, meta_info2_filename);
-
-  IndexDiff index_diff(index_files1, index_files2);
-  index_diff.Diff(term, term_len);
+void Diff() {
+  IndexDiff index_diff(command_line_args.index_files1, command_line_args.index_files2);
+  index_diff.Diff(command_line_args.term, command_line_args.term_len);
 }
 
 // Some sample code which allows user to retrieve index data (docIDs, frequencies, or positions) into an integer array.
-void RetrieveIndexData(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                       const char* term, int term_len) {
-  CacheManager* cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, lexicon_filename, doc_map_filename, meta_info_filename, true);
+void RetrieveIndexData() {
+  // Appropriate cache policy since we'll only be reading ahead into the index.
+  CacheManager* cache_policy = new MergingCachePolicy(command_line_args.index_files1.index_filename().c_str());
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, command_line_args.index_files1.lexicon_filename().c_str(),
+                                              command_line_args.index_files1.document_map_basic_filename().c_str(),
+                                              command_line_args.index_files1.document_map_extended_filename().c_str(),
+                                              command_line_args.index_files1.meta_info_filename().c_str(), true);
 
   // Need to read through the lexicon until we reach the term we want.
   LexiconData* lex_data;
-  while ((lex_data = index_reader->lexicon().GetNextEntry()) != NULL
-      && !(lex_data->term_len() == term_len && strncmp(lex_data->term(), term, min(lex_data->term_len(), term_len)) == 0)) {
+  while ((lex_data = index_reader->lexicon().GetNextEntry()) != NULL && !(lex_data->term_len() == command_line_args.term_len
+      && strncmp(lex_data->term(), command_line_args.term, min(lex_data->term_len(), command_line_args.term_len)) == 0)) {
     delete lex_data;
     continue;
   }
@@ -482,23 +462,28 @@ void RetrieveIndexData(const char* index_filename, const char* lexicon_filename,
 
 // Loops over certain index data (docIDs, frequencies, or positions). Useful for testing decompression speed. Has option for loading the index completely into
 // main memory before testing, or reading it from disk while traversing it.
-void LoopOverIndexData(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename,
-                       const char* term, int term_len, bool in_memory_index, bool memory_mapped_index) {
+void LoopOverIndexData() {
   CacheManager* cache_policy;
-  if (memory_mapped_index) {
-    cache_policy = new MemoryMappedCachePolicy(index_filename);  // Memory maps the index.
-  } else if (in_memory_index) {
-    cache_policy = new FullContiguousCachePolicy(index_filename);  // Loads the index fully into main memory.
+  if (command_line_args.memory_mapped_index) {
+    // Memory maps the index.
+    cache_policy = new MemoryMappedCachePolicy(command_line_args.index_files1.index_filename().c_str());
+  } else if (command_line_args.in_memory_index) {
+    // Loads the index fully into main memory.
+    cache_policy = new FullContiguousCachePolicy(command_line_args.index_files1.index_filename().c_str());
   } else {
-    cache_policy = new MergingCachePolicy(index_filename);  // Appropriate policy since we'll only be reading ahead into the index.
+    // Appropriate policy since we'll only be reading ahead into the index.
+    cache_policy = new MergingCachePolicy(command_line_args.index_files1.index_filename().c_str());
   }
 
-  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, lexicon_filename, doc_map_filename, meta_info_filename, true);
+  IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, command_line_args.index_files1.lexicon_filename().c_str(),
+                                              command_line_args.index_files1.document_map_basic_filename().c_str(),
+                                              command_line_args.index_files1.document_map_extended_filename().c_str(),
+                                              command_line_args.index_files1.meta_info_filename().c_str(), true);
 
   // Need to read through the lexicon until we reach the term we want.
   LexiconData* lex_data;
-  while ((lex_data = index_reader->lexicon().GetNextEntry()) != NULL
-      && !(lex_data->term_len() == term_len && strncmp(lex_data->term(), term, min(lex_data->term_len(), term_len)) == 0)) {
+  while ((lex_data = index_reader->lexicon().GetNextEntry()) != NULL && !(lex_data->term_len() == command_line_args.term_len
+      && strncmp(lex_data->term(), command_line_args.term, min(lex_data->term_len(), command_line_args.term_len)) == 0)) {
     delete lex_data;
     continue;
   }
@@ -529,25 +514,29 @@ void LoopOverIndexData(const char* index_filename, const char* lexicon_filename,
   delete cache_policy;
 }
 
-// TODO: Would be useful to be able to specify the name of the remapped index to be output on the command line.
-void RemapIndexDocIds(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename) {
-  IndexRemapper index_remapper(IndexFiles(index_filename, lexicon_filename, doc_map_filename, meta_info_filename), "index_remapped");
+void Remap() {
+  GetDefaultLogger().Log("Creating remapped index...", false);
+  const char* output_index_prefix = (command_line_args.output_index_prefix != NULL ? command_line_args.output_index_prefix : "index_remapped");
+  IndexRemapper index_remapper(command_line_args.index_files1, output_index_prefix);
   index_remapper.GenerateMap(command_line_args.doc_mapping_file);
+  Timer remapping_time;
   index_remapper.Remap();
+  GetDefaultLogger().Log("Time Elapsed: " + Stringify(remapping_time.GetElapsedTime()), false);
 }
 
-void LayerifyIndex(const char* index_filename, const char* lexicon_filename, const char* doc_map_filename, const char* meta_info_filename) {
-  LayeredIndexGenerator layered_index_generator = LayeredIndexGenerator(IndexFiles(index_filename, lexicon_filename, doc_map_filename, meta_info_filename),
-                                                                        "index_layered");
+void Layerify() {
+  GetDefaultLogger().Log("Creating layered index...", false);
+  const char* output_index_prefix = (command_line_args.output_index_prefix != NULL ? command_line_args.output_index_prefix : "index_layered");
+  LayeredIndexGenerator layered_index_generator = LayeredIndexGenerator(command_line_args.index_files1, output_index_prefix);
+  Timer layering_time;
   layered_index_generator.CreateLayeredIndex();
+  GetDefaultLogger().Log("Time Elapsed: " + Stringify(layering_time.GetElapsedTime()), false);
 }
 
 void GenerateUrlSortedDocIdMappingFile(const char* document_urls_filename) {
   GetDefaultLogger().Log("Generating URL sorted docID mapping file...", false);
-
   CollectionUrlExtractor collection_url_extractor;
   collection_url_extractor.ProcessDocumentCollections(cin);
-
   Timer url_extraction_time;
   collection_url_extractor.ParseTrec(document_urls_filename);
   GetDefaultLogger().Log("Time Elapsed: " + Stringify(url_extraction_time.GetElapsedTime()), false);
@@ -593,22 +582,19 @@ void OverrideConfigurationOptions(const string& options) {
 }
 
 // Displays common usage information. For more details, the project wiki should be consulted.
-// TODO: Update the help information.
 void Help() {
-  cout << "To index: irtk --index\n";
-  cout << "To merge: irtk --merge=[value]\n";
-  cout << "                        value is 'initial', 'input'\n";
-  cout << "  options:\n";
-  cout << "    --merge-degree=[value]: specify the merge degree to use (default: 64)\n";
-  cout << "To query: irtk --query [IndexFilename] [LexiconFilename] [DocumentMapFilename] [MetaFilename]\n";
-  cout << "  options:\n";
-  cout << "    --query-mode=[value]: sets the querying mode.\n";
-  cout << "                          value is 'interactive', 'interactive-single', or 'batch'\n";
-  cout << "To cat: irtk --cat [IndexFilename] [LexiconFilename] [DocumentMapFilename] [MetaFilename]\n";
-  cout << "To diff: irtk --diff [IndexFilename1] [LexiconFilename1] [DocumentMapFilename1] [MetaFilename1] [IndexFilename2] [LexiconFilename2] [DocumentMapFilename2] [MetaFilename2]\n";
-  cout << "To run compression tests: irtk --test-compression\n";
-  cout << "To test a particular coder: irtk --test-coder [rice, turbo-rice, pfor, s9, s16, vbyte, null]\n";
-  cout << endl;
+  cout << "* Quick Start Usage *\n";
+  cout << "index usage: 'irtk --index'\n";
+  cout << "  expects a list of paths to document bundles from stdin\n";
+  cout << "\n";
+  cout << "merge usage: 'irtk --merge'\n";
+  cout << "  merges the initial indices generated by the indexing process\n";
+  cout << "\n";
+  cout << "query: 'irtk --query'\n";
+  cout << "  queries the final index generated by the merging process\n";
+  cout << "\n";
+
+  cout << "Please see the reference manual at 'http://code.google.com/p/poly-ir-toolkit/wiki/ReferenceManual' for more detailed usage information." << endl;
 }
 
 void SeekHelp() {
@@ -791,32 +777,109 @@ void SimdTest() {
   }
 }
 
+IndexFiles ParseIndexName(const char* index_name) {
+  assert(index_name != NULL);
+
+  const char* colon = strchr(index_name, ':');
+  if (colon != NULL) {
+    const char* dot = strchr(colon + 1, '.');
+    if (dot != NULL && (dot - colon) > 1 && strlen(dot + 1) > 0) {
+      int group_num, file_num;
+      group_num = atoi(colon + 1);
+      file_num = atoi(dot + 1);
+      return IndexFiles(string(index_name, (colon - index_name)), group_num, file_num);
+    } else {
+      GetErrorLogger().Log("Invalid index name specified on command line.", true);
+    }
+  } else {
+    return IndexFiles(index_name);
+  }
+
+  return IndexFiles();
+}
+
 int main(int argc, char** argv) {
-  const char* opt_string = "iqcdh";
-  const struct option long_opts[] = { { "index", no_argument, NULL, 'i' },                                // Index the document collection bundles.
-                                      { "merge", required_argument, NULL, 0 },                            // Merge the indices (depends on argument).
-                                      { "merge-degree", required_argument, NULL, 0 },                     // Override the default merge degree.
-                                      { "query", no_argument, NULL, 'q' },                                // Query an index.
-                                      { "query-algorithm", required_argument, NULL, 0 },                  // Set which query algorithm we want to use.
-                                      { "query-mode", required_argument, NULL, 0 },                       // Set which query mode we want to use.
-                                      { "query-stop-list-file", required_argument, NULL, 0 },             // Use the following stop word list at query time.
-                                      { "result-format", required_argument, NULL, 0 },                    // Set which result format we want to use.
-                                      { "cat", no_argument, NULL, 'c' },                                  // Outputs inverted list data in a human readable format.
-                                      { "cat-term", required_argument, NULL, 0 },                         // Specify the inverted list (term) on which we want to run the cat procedure.
-                                      { "diff", no_argument, NULL, 'd' },                                 // Outputs the differences between two inverted lists.
-                                      { "diff-term", required_argument, NULL, 0 },                        // Specify the inverted list (term) on which we want to run the diff procedure.
-                                      { "remap", required_argument, NULL, 0 },                            // Remaps an index. The argument specifies the document mapping file to use for the remap procedure.
-                                      { "layerify", no_argument, NULL, 0 },                               // Creates a layered index.
-                                      { "retrieve-index-data", required_argument, NULL, 0 },              // Retrieves index data for an inverted list into an in-memory array. See function 'RetrieveIndexData()'.
-                                      { "loop-over-index-data", required_argument, NULL, 0 },             // Loops over an inverted list (decompresses but does not do any top-k). Useful for benchmarking decompression coders.
-                                      { "in-memory-index", no_argument, NULL, 0 },                        // Loads the index into main memory.
-                                      { "memory-map-index", no_argument, NULL, 0 },                       // Memory maps the index into our address space.
-                                      { "block-level-index", no_argument, NULL, 0 },                      // Builds an in-memory block level index.
-                                      { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },  // Generates a docID mapping file (docIDs are remapped by URL) that can be used as input to the remap procedure.
-                                      { "config-options", required_argument, NULL, 0 },                   // Overrides/adds options defined in the configuration file.
-                                      { "test-compression", no_argument, NULL, 0 },                       // Runs compression tests on some randomly generated data.
-                                      { "test-coder", required_argument, NULL, 0 },                       // Tests a specific coder.
-                                      { "help", no_argument, NULL, 'h' },                                 // Help.
+  const char* opt_string = "imqcdh";
+  const struct option long_opts[] = { // Index the document collection bundles.
+                                      { "index", no_argument, NULL, 'i' },
+
+                                      // Merge the indices generated during the indexing step.
+                                      { "merge", no_argument, NULL, 'm' },
+
+                                      // Override the default merge degree.
+                                      { "merge-degree", required_argument, NULL, 0 },
+
+                                      // Specify the files to merge and their resulting index names on stdin.
+                                      { "merge-input", no_argument, NULL, 0 },
+
+                                      // Query an index.
+                                      { "query", no_argument, NULL, 'q' },
+
+                                      // Set which query algorithm we want to use.
+                                      { "query-algorithm", required_argument, NULL, 0 },
+
+                                      // Set which query mode we want to use.
+                                      { "query-mode", required_argument, NULL, 0 },
+
+                                      // Use the following stop word list at query time.
+                                      { "query-stop-list-file", required_argument, NULL, 0 },
+
+                                      // Set which result format we want to use.
+                                      { "result-format", required_argument, NULL, 0 },
+
+                                      // Outputs inverted list data in a human readable format.
+                                      { "cat", no_argument, NULL, 'c' },
+
+                                      // Specify the inverted list (term) on which we want to run the cat procedure.
+                                      { "cat-term", required_argument, NULL, 0 },
+
+                                      // Outputs the differences between two inverted lists.
+                                      { "diff", no_argument, NULL, 'd' },
+
+                                      // Specify the inverted list (term) on which we want to run the diff procedure.
+                                      { "diff-term", required_argument, NULL, 0 },
+
+                                      // Remaps an index. The argument specifies the document mapping file to use for the remap procedure.
+                                      { "remap", required_argument, NULL, 0 },
+
+                                      // Creates a layered index.
+                                      { "layerify", no_argument, NULL, 0 },
+
+                                      // Retrieves index data for an inverted list into an in-memory array. See function 'RetrieveIndexData()'.
+                                      { "retrieve-index-data", required_argument, NULL, 0 },
+
+                                      // Loops over an inverted list (decompresses but does not do any top-k). Useful for benchmarking decompression coders.
+                                      { "loop-over-index-data", required_argument, NULL, 0 },
+
+                                      // Loads the index into main memory.
+                                      { "in-memory-index", no_argument, NULL, 0 },
+
+                                      // Memory maps the index into our address space.
+                                      { "memory-map-index", no_argument, NULL, 0 },
+
+                                      // Builds an in-memory block level index.
+                                      { "block-level-index", no_argument, NULL, 0 },
+
+                                      // Loads and uses the external index during query processing. Some query algorithms require it.
+                                      // TODO: Currently not used. Algorithms that require it automatically load the external index.
+                                      { "use-external-index", no_argument, NULL, 0 },
+
+                                      // Generates a docID mapping file (docIDs are remapped by URL) that can be used as input to the remap procedure.
+                                      { "generate-url-sorted-doc-mapping", required_argument, NULL, 0 },
+
+                                      // Overrides/adds options defined in the configuration file.
+                                      { "config-options", required_argument, NULL, 0 },
+
+                                      // Runs compression tests on some randomly generated data.
+                                      { "test-compression", no_argument, NULL, 0 },
+
+                                      // Tests a specific coder.
+                                      { "test-coder", required_argument, NULL, 0 },
+
+                                      // Print help information.
+                                      { "help", no_argument, NULL, 'h' },
+
+                                      // Terminate options list.
                                       { NULL, no_argument, NULL, 0 } };
 
   int opt, long_index;
@@ -824,6 +887,10 @@ int main(int argc, char** argv) {
     switch (opt) {
       case 'i':
         command_line_args.mode = CommandLineArgs::kIndex;
+        break;
+
+      case 'm':
+        command_line_args.mode = CommandLineArgs::kMergeInitial;
         break;
 
       case 'q':
@@ -838,25 +905,16 @@ int main(int argc, char** argv) {
         command_line_args.mode = CommandLineArgs::kDiff;
         break;
 
-      case 't':
-        TestCompression();
-        return EXIT_SUCCESS;
-
       case 'h':
         Help();
         return EXIT_SUCCESS;
 
       case 0:
         // Process options which do not have a short arg.
-        if (strcmp("merge", long_opts[long_index].name) == 0) {
-          if (strcmp("initial", optarg) == 0)
-            command_line_args.mode = CommandLineArgs::kMergeInitial;
-          else if (strcmp("input", optarg) == 0)
-            command_line_args.mode = CommandLineArgs::kMergeInput;
-          else
-            UnrecognizedOptionValue(long_opts[long_index].name, optarg);
-        } else if (strcmp("merge-degree", long_opts[long_index].name) == 0) {
+        if (strcmp("merge-degree", long_opts[long_index].name) == 0) {
           command_line_args.merge_degree = atoi(optarg);
+        } else if (strcmp("merge-input", long_opts[long_index].name) == 0) {
+          command_line_args.mode = CommandLineArgs::kMergeInput;
         } else if (strcmp("query-algorithm", long_opts[long_index].name) == 0) {
           if (strcmp("default", optarg) == 0)
             command_line_args.query_algorithm = QueryProcessor::kDefault;
@@ -896,8 +954,7 @@ int main(int argc, char** argv) {
           else
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("query-stop-list-file", long_opts[long_index].name) == 0) {
-          command_line_args.query_stop_words_list_file = new char[strlen(optarg)];
-          memcpy(command_line_args.query_stop_words_list_file, optarg, strlen(optarg));
+          command_line_args.query_stop_words_list_file = optarg;
         } else if (strcmp("result-format", long_opts[long_index].name) == 0) {
           if (strcmp("trec", optarg) == 0)
             command_line_args.result_format = QueryProcessor::kTrec;
@@ -909,24 +966,20 @@ int main(int argc, char** argv) {
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("remap", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kRemap;
-          command_line_args.doc_mapping_file = new char[strlen(optarg)];
-          memcpy(command_line_args.doc_mapping_file, optarg, strlen(optarg));
+          command_line_args.doc_mapping_file = optarg;
         } else if (strcmp("layerify", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kLayerify;
         } else if (strcmp("cat-term", long_opts[long_index].name) == 0 || strcmp("diff-term", long_opts[long_index].name) == 0) {
           command_line_args.term_len = strlen(optarg);
-          command_line_args.term = new char[command_line_args.term_len];
-          memcpy(command_line_args.term, optarg, command_line_args.term_len);
+          command_line_args.term = optarg;
         } else if (strcmp("retrieve-index-data", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kRetrieveIndexData;
           command_line_args.term_len = strlen(optarg);
-          command_line_args.term = new char[command_line_args.term_len];
-          memcpy(command_line_args.term, optarg, command_line_args.term_len);
+          command_line_args.term = optarg;
         } else if (strcmp("loop-over-index-data", long_opts[long_index].name) == 0) {
           command_line_args.mode = CommandLineArgs::kLoopOverIndexData;
           command_line_args.term_len = strlen(optarg);
-          command_line_args.term = new char[command_line_args.term_len];
-          memcpy(command_line_args.term, optarg, command_line_args.term_len);
+          command_line_args.term = optarg;
         } else if (strcmp("in-memory-index", long_opts[long_index].name) == 0) {
           command_line_args.in_memory_index = true;
           SetConfigurationOption(string(config_properties::kMemoryResidentIndex) + string("=true"));
@@ -935,6 +988,8 @@ int main(int argc, char** argv) {
           SetConfigurationOption(string(config_properties::kMemoryMappedIndex) + string("=true"));
         } else if (strcmp("block-level-index", long_opts[long_index].name) == 0) {
           SetConfigurationOption(string(config_properties::kUseBlockLevelIndex) + string("=true"));
+        } else if (strcmp("use-external-index", long_opts[long_index].name) == 0) {
+          command_line_args.use_external_index = true;
         } else if (strcmp("generate-url-sorted-doc-mapping", long_opts[long_index].name) == 0) {
           GenerateUrlSortedDocIdMappingFile(optarg);
           return EXIT_SUCCESS;
@@ -959,72 +1014,55 @@ int main(int argc, char** argv) {
   int num_input_files = argc - optind;
 
   switch (command_line_args.mode) {
+    // These take an index name as the argument.
+    case CommandLineArgs::kCat:
+    case CommandLineArgs::kLoopOverIndexData:
     case CommandLineArgs::kQuery:
+    case CommandLineArgs::kRetrieveIndexData:
       for (int i = 0; i < num_input_files; ++i) {
         switch (i) {
           case 0:
-            command_line_args.index1_filename = input_files[i];
-            break;
-          case 1:
-            command_line_args.lexicon1_filename = input_files[i];
-            break;
-          case 2:
-            command_line_args.doc_map1_filename = input_files[i];
-            break;
-          case 3:
-            command_line_args.meta_info1_filename = input_files[i];
-            break;
-          case 4:
-            command_line_args.external_index1_filename = input_files[i];
+            command_line_args.index_files1 = ParseIndexName(input_files[i]);
             break;
         }
       }
       break;
 
-    case CommandLineArgs::kCat:
-    case CommandLineArgs::kDiff:
-    case CommandLineArgs::kRetrieveIndexData:
-    case CommandLineArgs::kLoopOverIndexData:
+    // These take an index name to operate on and an output index name as the arguments.
     case CommandLineArgs::kLayerify:
     case CommandLineArgs::kRemap:
       for (int i = 0; i < num_input_files; ++i) {
         switch (i) {
-          // Index files for the first index.
           case 0:
-            command_line_args.index1_filename = input_files[i];
+            command_line_args.index_files1 = ParseIndexName(input_files[i]);
             break;
           case 1:
-            command_line_args.lexicon1_filename = input_files[i];
-            break;
-          case 2:
-            command_line_args.doc_map1_filename = input_files[i];
-            break;
-          case 3:
-            command_line_args.meta_info1_filename = input_files[i];
-            break;
-          // Index files for the seconds index (if any).
-          case 4:
-            command_line_args.index2_filename = input_files[i];
-            break;
-          case 5:
-            command_line_args.lexicon2_filename = input_files[i];
-            break;
-          case 6:
-            command_line_args.doc_map2_filename = input_files[i];
-            break;
-          case 7:
-            command_line_args.meta_info2_filename = input_files[i];
+            command_line_args.output_index_prefix = input_files[i];
             break;
         }
       }
       break;
+
+    // These take two index names as the arguments.
+    case CommandLineArgs::kDiff:
+      for (int i = 0; i < num_input_files; ++i) {
+        switch (i) {
+          case 0:
+            command_line_args.index_files1 = ParseIndexName(input_files[i]);
+            break;
+          case 1:
+            command_line_args.index_files2 = ParseIndexName(input_files[i]);
+            break;
+        }
+      }
+      break;
+
     // These don't take any arguments.
     case CommandLineArgs::kIndex:
     case CommandLineArgs::kMergeInitial:
     case CommandLineArgs::kMergeInput:
+    case CommandLineArgs::kNoIdea:
       break;
-    default:
-      assert(false);
   }
 
   Init();
@@ -1032,44 +1070,34 @@ int main(int argc, char** argv) {
 
   switch (command_line_args.mode) {
     case CommandLineArgs::kIndex:
-      IndexCollection();
+      Index();
       break;
     case CommandLineArgs::kQuery:
-      Query(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-            command_line_args.external_index1_filename, command_line_args.query_stop_words_list_file, command_line_args.query_algorithm,
-            command_line_args.query_mode, command_line_args.result_format);
+      Query();
       break;
     case CommandLineArgs::kMergeInitial:
-      MergeInitial(command_line_args.merge_degree);
+      MergeInitial();
       break;
     case CommandLineArgs::kMergeInput:
       MergeInput();
       break;
     case CommandLineArgs::kRemap:
-      RemapIndexDocIds(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
-                       command_line_args.meta_info1_filename);
+      Remap();
       break;
     case CommandLineArgs::kLayerify:
-      LayerifyIndex(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
-                    command_line_args.meta_info1_filename);
+      Layerify();
       break;
     case CommandLineArgs::kCat:
-      Cat(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-          command_line_args.term, command_line_args.term_len);
+      Cat();
       break;
     case CommandLineArgs::kDiff:
-      Diff(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename, command_line_args.meta_info1_filename,
-           command_line_args.index2_filename, command_line_args.lexicon2_filename, command_line_args.doc_map2_filename, command_line_args.meta_info2_filename,
-           command_line_args.term, command_line_args.term_len);
+      Diff();
       break;
     case CommandLineArgs::kRetrieveIndexData:
-      RetrieveIndexData(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
-                        command_line_args.meta_info1_filename, command_line_args.term, command_line_args.term_len);
+      RetrieveIndexData();
       break;
     case CommandLineArgs::kLoopOverIndexData:
-      LoopOverIndexData(command_line_args.index1_filename, command_line_args.lexicon1_filename, command_line_args.doc_map1_filename,
-                        command_line_args.meta_info1_filename, command_line_args.term, command_line_args.term_len, command_line_args.in_memory_index,
-                        command_line_args.memory_mapped_index);
+      LoopOverIndexData();
       break;
     default:
       Help();

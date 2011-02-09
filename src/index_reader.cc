@@ -1094,12 +1094,13 @@ void Lexicon::GetNext(LexiconEntry* lexicon_entry) {
  * Initiates loading of several MBs worth of blocks ahead since we don't know exactly how many blocks are in the list. Each block is processed as soon as it's
  * needed and we know it has been loaded into memory.
  **************************************************************************************************************************************************************/
-IndexReader::IndexReader(Purpose purpose, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_filename,
-                         const char* meta_info_filename, bool use_positions, const ExternalIndexReader* external_index_reader) :
+IndexReader::IndexReader(Purpose purpose, CacheManager& cache_manager, const char* lexicon_filename, const char* doc_map_basic_filename,
+                         const char* doc_map_extended_filename, const char* meta_info_filename, bool use_positions,
+                         const ExternalIndexReader* external_index_reader) :
   purpose_(purpose),
   kLexiconSize(Configuration::GetResultValue<long int>(Configuration::GetConfiguration().GetNumericalValue(config_properties::kLexiconSize))),
   lexicon_(kLexiconSize, lexicon_filename, (purpose_ == kRandomQuery)),
-  document_map_("index.dmap_basic", "index.dmap_extended"),
+  document_map_(doc_map_basic_filename, doc_map_extended_filename),
   cache_manager_(cache_manager),
   meta_info_(meta_info_filename),
   includes_contexts_(IndexConfiguration::GetResultValue(meta_info_.GetNumericalValue(meta_properties::kIncludesContexts), true)),

@@ -48,11 +48,13 @@ IndexDiff::IndexDiff(const IndexFiles& index_files1, const IndexFiles& index_fil
   index1_(NULL), index2_(NULL), includes_contexts_(true), includes_positions_(true) {
   CacheManager* cache_policy1 = new MergingCachePolicy(index_files1.index_filename().c_str());
   IndexReader* index_reader1 = new IndexReader(IndexReader::kMerge, *cache_policy1, index_files1.lexicon_filename().c_str(),
-                                               index_files1.document_map_filename().c_str(), index_files1.meta_info_filename().c_str(), true);
+                                               index_files1.document_map_basic_filename().c_str(), index_files1.document_map_extended_filename().c_str(),
+                                               index_files1.meta_info_filename().c_str(), true);
 
   CacheManager* cache_policy2 = new MergingCachePolicy(index_files2.index_filename().c_str());
   IndexReader* index_reader2 = new IndexReader(IndexReader::kMerge, *cache_policy2, index_files2.lexicon_filename().c_str(),
-                                               index_files2.document_map_filename().c_str(), index_files2.meta_info_filename().c_str(), true);
+                                               index_files2.document_map_basic_filename().c_str(), index_files2.document_map_extended_filename().c_str(),
+                                               index_files2.meta_info_filename().c_str(), true);
 
   // If one of the indices does not contain contexts or positions then we ignore them in both indices.
   if (!index_reader1->includes_contexts() || !index_reader2->includes_contexts())

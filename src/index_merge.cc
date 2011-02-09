@@ -88,7 +88,8 @@ IndexMerger::IndexMerger(const std::vector<IndexFiles>& input_index_files, const
 
     CacheManager* cache_policy = new MergingCachePolicy(curr_index_files.index_filename().c_str());
     IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, curr_index_files.lexicon_filename().c_str(),
-                                                curr_index_files.document_map_filename().c_str(), curr_index_files.meta_info_filename().c_str(), true);
+                                                curr_index_files.document_map_basic_filename().c_str(),
+                                                curr_index_files.document_map_extended_filename().c_str(), curr_index_files.meta_info_filename().c_str(), true);
 
     // If one index from the ones to be merged does not contain contexts or positions
     // then the whole merged index will not contain them.
@@ -723,11 +724,17 @@ void CollectionMerger::RemoveIndexFiles(const IndexFiles& index_files) {
                               errno, false);
   }
 
-  remove_ret = remove(index_files.document_map_filename().c_str());
+  /*remove_ret = remove(index_files.document_map_basic_filename().c_str());
   if (remove_ret < 0) {
-    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove document map file '" + index_files.document_map_filename()
-        + "'", errno, false);
+    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove basic document map file '"
+        + index_files.document_map_basic_filename() + "'", errno, false);
   }
+
+  remove_ret = remove(index_files.document_map_extended_filename().c_str());
+  if (remove_ret < 0) {
+    GetErrorLogger().LogErrno("remove() in CollectionMerger::RemoveIndexFiles(), could not remove extended document map file '"
+        + index_files.document_map_extended_filename() + "'", errno, false);
+  }*/
 
   remove_ret = remove(index_files.meta_info_filename().c_str());
   if (remove_ret < 0) {
@@ -751,11 +758,17 @@ void CollectionMerger::RenameIndexFiles(const IndexFiles& curr_index_files, cons
         + "' to '" + final_index_files.lexicon_filename() + "'", errno, false);
   }
 
-  rename_ret = rename(curr_index_files.document_map_filename().c_str(), final_index_files.document_map_filename().c_str());
+  /*rename_ret = rename(curr_index_files.document_map_basic_filename().c_str(), final_index_files.document_map_basic_filename().c_str());
   if (rename_ret < 0) {
-    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename document map file '"
-        + curr_index_files.document_map_filename() + "' to '" + final_index_files.document_map_filename() + "'", errno, false);
+    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename basic document map file '"
+        + curr_index_files.document_map_basic_filename() + "' to '" + final_index_files.document_map_basic_filename() + "'", errno, false);
   }
+
+  rename_ret = rename(curr_index_files.document_map_extended_filename().c_str(), final_index_files.document_map_extended_filename().c_str());
+  if (rename_ret < 0) {
+    GetErrorLogger().LogErrno("rename() in CollectionMerger::RenameIndexFiles(), could not rename extended document map file '"
+        + curr_index_files.document_map_extended_filename() + "' to '" + final_index_files.document_map_extended_filename() + "'", errno, false);
+  }*/
 
   rename_ret = rename(curr_index_files.meta_info_filename().c_str(), final_index_files.meta_info_filename().c_str());
   if (rename_ret < 0) {

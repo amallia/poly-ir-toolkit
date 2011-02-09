@@ -87,7 +87,8 @@ IndexRemapper::IndexRemapper(const IndexFiles& input_index_files, const string& 
 
   CacheManager* cache_policy = new MergingCachePolicy(input_index_files.index_filename().c_str());
   IndexReader* index_reader = new IndexReader(IndexReader::kMerge, *cache_policy, input_index_files.lexicon_filename().c_str(),
-                                              input_index_files.document_map_filename().c_str(), input_index_files.meta_info_filename().c_str(), true);
+                                              input_index_files.document_map_basic_filename().c_str(),
+                                              input_index_files.document_map_extended_filename().c_str(), input_index_files.meta_info_filename().c_str(), true);
 
   // Coding policy for the remapped index remains the same as that of the original index.
   coding_policy_helper::LoadPolicyAndCheck(doc_id_compressor_, index_reader->meta_info().GetValue(meta_properties::kIndexDocIdCoding), "docID");
@@ -216,8 +217,6 @@ void IndexRemapper::Remap() {
   WriteMetaFile(output_index_files_.meta_info_filename());
   remapped_indices_.push_back(output_index_files_);
 
-  GetDefaultLogger().Log("Finished remapping.", false);
-
   delete[] index_entry_buffer;
   // TODO: Would be a good idea to delete the positions pool right here, before starting the merge.
   //       'positions_pool' would need to be a pointer in this case (or provide a method to explicitly deallocate the memory).
@@ -225,8 +224,6 @@ void IndexRemapper::Remap() {
   // Now merge the remapped files.
   const bool kDeleteIntermediateRemappedFiles = (Configuration::GetConfiguration().GetValue(config_properties::kDeleteIntermediateRemappedFiles) == "true") ? true : false;
   CollectionMerger collection_merger = CollectionMerger(remapped_indices_, final_output_index_files_, kDeleteIntermediateRemappedFiles);
-
-  GetDefaultLogger().Log("Finished remapping index.", false);
 }
 
 bool IndexRemapper::CopyToIndexEntry(IndexEntry* index_entry, PositionsPool* positions_pool) {

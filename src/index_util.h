@@ -47,14 +47,14 @@ public:
   IndexFiles(const std::string& prefix);
   IndexFiles(int group_num, int file_num);
   IndexFiles(const std::string& prefix, int group_num, int file_num);
-  IndexFiles(const std::string& index_filename, const std::string& lexicon_filename, const std::string& document_map_filename,
-             const std::string& meta_info_filename);
-  IndexFiles(const std::string& index_filename, const std::string& lexicon_filename, const std::string& document_map_filename,
-             const std::string& meta_info_filename, const std::string& external_index_filename);
 
   void UpdateNums(int group_num, int file_num);
 
   void SetDirectory(const std::string& dir);
+
+  const std::string& prefix() const {
+    return prefix_;
+  }
 
   const std::string& index_filename() const {
     return index_filename_;
@@ -64,8 +64,12 @@ public:
     return lexicon_filename_;
   }
 
-  const std::string& document_map_filename() const {
-    return document_map_filename_;
+  const std::string& document_map_basic_filename() const {
+    return document_map_basic_filename_;
+  }
+
+  const std::string& document_map_extended_filename() const {
+    return document_map_extended_filename_;
   }
 
   const std::string& meta_info_filename() const {
@@ -82,7 +86,8 @@ private:
   std::string prefix_;
   std::string index_filename_;
   std::string lexicon_filename_;
-  std::string document_map_filename_;
+  std::string document_map_basic_filename_;
+  std::string document_map_extended_filename_;
   std::string meta_info_filename_;
   std::string external_index_filename_;
 };
