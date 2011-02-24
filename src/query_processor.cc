@@ -413,8 +413,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
   ListData* max_score_sorted_list_data_pointers[total_num_layers];  // Using a variable length array here.
   uint32_t max_num_accumulators = 0;
-//  int max_layer_docs = 0;
-//  uint32_t max_num_docs = 0;
   int curr_layer = 0;
   for (int i = 0; i < num_query_terms; ++i) {
     for (int j = 0; j < query_term_data[i]->num_layers(); ++j) {
@@ -423,70 +421,62 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
       ++curr_layer;
 
       max_num_accumulators += list_data_pointers[i][j]->num_docs();
-//      if (list_data_pointers[i][j]->num_docs() > max_layer_docs) {
-//        max_layer_docs = list_data_pointers[i][j]->num_docs();
-//        max_num_docs += list_data_pointers[i][j]->num_docs();
-//      }
     }
   }
   assert(curr_layer == total_num_layers);
 
+  // This is a very crude upperbound on the maximum number of accumulators we might need (the lists will have docIDs in common). This uses more memory, but
+  // avoids resizing the accumulator array if we find that it's too small.
+  // TODO: If the accumulator array is sized to contain all docs in the collection, we can just update accumulators by finding them by their docID as the index.
+  //       This is only necessary for OR mode processing. After it's safe to move into AND mode, we can just compact the array to get better locality and thus
+  //       better cache performance.
   max_num_accumulators = min(max_num_accumulators, collection_total_num_docs_);
-//  max_num_docs = min(max_num_docs, collection_total_num_docs_);
 
   // Sort all the layers by their max score.
   sort(max_score_sorted_list_data_pointers, max_score_sorted_list_data_pointers + total_num_layers, ListLayerMaxScoreCompare());
 
-  enum ProcessingMode {kAnd, kOr};
+  enum ProcessingMode {
+    kAnd, kOr
+  };
   ProcessingMode curr_processing_mode = kOr;
 
-  // TODO: unclear how many accumulators we should create. Creating the max number for a layer might still not be enough (if you plan to keep using the same array).
-  // Maybe create an array the size of the union of the docs in the segments, bounded by the number of docs in the whole collection...
-  // We always start with a sorted accumulator array, so we do binary search to find the accumulator we want (where we update the starting location we binary search from since
-  // the docIDs we're searching for are monotonically increasing).
-  // We can also use some percentage of the total documents from each list
-  // If a list is longer than D documents, then take only n% of documents from that list.
-  // Here, we'd assume that if a list is very long, we'll early terminate before processing all of it's low scoring documents.
-  // In this case, it's possible that we'd need to resize the accumulator structure -- so take that into account.
-
-  // Alternatively, while we're in OR mode, use either a hash table or an array sized to the num documents in the collection (and the docID is the index into array).
-  // Then, when we switch to AND mode, compact and sort the array, and use that.
-  // Whenever we remove accumulators, at the end, we can just compact it.
-
-  // TODO: Instead of storing accumulators in docID sorted order, what if we store it in score sorted order.
-  //       Since the list is in main memory --- how much of a difference does it make, if we employ skips or not...?
-
   int accumulators_size = max_num_accumulators;
-//  int accumulators_size = 1048576;// TODO: try picking just some number...
   Accumulator* accumulators = new Accumulator[accumulators_size];
-  // Since our BM25 partial scores can be negative for documents from lists of very common terms, we need to set the initial threshold to the lowest possible score.
-  float threshold = -numeric_limits<float>::max();
+  float threshold = -numeric_limits<float>::max();  // We set the initial threshold to the lowest possible score. Note that our partial BM25 scores cannot be
+                                                    // negative (although the standard BM25 formula does allow negative scores).
   float total_remainder = 0;  // The upperbound for the score of any new document encountered.
   int num_accumulators = 0;
 
-  // Keep track of the threshold. This is a min heap.
+  // Necessary to keep track of the threshold. This is a min heap. For each layer we process, we need to keep track of the top-k scores to figure out the
+  // threshold. The big problem we have is that we need to reinitialize the heap before starting to process the next layer. We do this to handle updated
+  // accumulators; when an accumulator is updated (and it's score is already in the heap), if we simply add it to the
+  // heap again, we'll be artificially increasing the threshold score, which could lead to incorrect results. So, we have to reinitialize the heap and insert
+  // every accumulator (whether updated or not) to the heap again. This method takes O(n*log(k)) where k is the number of scores we keep in the heap --- since
+  // k is a constant, it's really O(n), but the constant factor is something to keep in mind.
+  // * Another solution is to keep Accumulator pointers in the heap, and for each accumulator, store a boolean field indicating whether its score is in the
+  // heap. Then, when we update the score of an accumulator that is in the heap, we'll do a make_heap() to preserve the heap property. When we remove an
+  // accumulator pointer from the heap, we just set it's boolean flag (indicating whether it's in the heap) to false. make_heap() is a O(k) operation.
+  // This scheme would be good when the majority of accumulators are not updated, that is, their score won't make it into the top-k. According to a sample
+  // query, there are significantly less updates than old accumulator scores. This method seems promising.
+  // * Another solution is to use a select (quick-select) algorithm to find the k-th largest score from the accumulators. This can be done after finishing
+  // processing a layer. This is a O(n) operation, where n is the number of accumulators. Note: after testing, this does not work too well in practice.
+
+//#define ACCUMULATOR_SELECT  // Define this to use a select algorithm to find the k-th largest accumulator score (the threshold).
+#ifndef ACCUMULATOR_SELECT
   float top_k_scores[kMaxNumResults];  // Using a variable length array here.
+  Accumulator* top_k_scores[kMaxNumResults];  // Using a variable length array here.
+#endif
 
   float term_upperbounds[num_query_terms];  // Using a variable length array here.
 
-  for(int i = 0; i < total_num_layers; ++i) {
-    // Check accumulators if we can switch to AND mode.
-//      threshold = top_k_scores[0];//TODO: How to best track the threshold? Also...might need to account for updates of accumulators
-    //                                  (if an accumulator is already inserted, we don't want to double count it + it's updated score, could lead to problem...
-    ////////////////////////////////////// but is that only when we're not up to k accumulators yet??? NO --- it happens when the updated accumulator score pushes
-    //////////////////////////////////////// out a lower accumulator score --- and this artificially bumps up the threshold ---.
-    ///////////////////////////////////////
-    /*
-     * Can store pointers to the top-k accumulators. Then just write a comparison function...for the scores...and use the docID to make sure we don't insert duplicate accumulators...
-     *
-     *
-     * While you're processing the segment --- can always start to create a new top-k heap
-     * Since you'll be going through all the accumulators anyway, might as well do this here! Then no need to deal with updates accumulator scores!
-     */
+  for (int i = 0; i < total_num_layers; ++i) {
+#ifdef IRTK_DEBUG
+    cout << "Processing layer #" << i << ", with upperbound " << max_score_sorted_list_data_pointers[i]->score_threshold() << ", for term #"
+        << max_score_sorted_list_data_pointers[i]->term_num() << endl;
+#endif
 
-    // We calculate the remainder function here over all terms, to find the upperbound score
-    // of any newly discovered docID.
-//    cout << "Processing layer # " << i << ", with upperbound " << max_score_sorted_list_data_pointers[i]->score_threshold() << ", for term #" << max_score_sorted_list_data_pointers[i]->term_num() << endl;
+    // Check accumulators to see whether we can switch to AND mode.
+    // We calculate the remainder function here over all terms, to find the upperbound score of any newly discovered docID.
     total_remainder = 0;
     for (int j = 0; j < num_query_terms; ++j) {
       for (int k = i; k < total_num_layers; ++k) {
@@ -496,21 +486,14 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
         }
       }
     }
-//    cout << "Remainder function (total upperbound): " << total_remainder << endl;
 
     // Set processing mode to AND if the conditions are right.
     if (total_remainder < threshold) {
-//      cout << "SWITCHING TO AND MODE!, total_remainder: " << total_remainder << ", threshold: " << threshold << endl;
+#ifdef IRTK_DEBUG
+      cout << "Switching to AND mode (total_remainder: " << total_remainder << ", threshold: " << threshold << ")." << endl;
+#endif
       curr_processing_mode = kAnd;
     }
-
-//    /////////////////////////////////TODO
-//    if (i == 17) {
-//      for (int j = 0; j < (num_accumulators); ++j) {
-//        cout << "accumulators[" << j << "]: " << accumulators[j].doc_id << endl;
-//      }
-//    }
-//    ////////////////////////////////////
 
     // Accumulators should always be in docID sorted order before we start processing a layer.
     for (int j = 0; j < (num_accumulators - 1); ++j) {
@@ -518,22 +501,28 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
     }
 
     // Process postings based on the mode we're in.
+    // TODO: Look into using binary search on the accumulator array to find the docID we need. Binary search is a good option here since we always start with a
+    //       sorted accumulator array.
     switch (curr_processing_mode) {
       case kOr:
-//        cout << "OR MODE" << endl;
-        threshold = ProcessListLayer(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k_scores, kMaxNumResults);
+#ifdef ACCUMULATOR_SELECT
+        ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, NULL, kMaxNumResults);
+#else
+        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k_scores, kMaxNumResults);
+#endif
         break;
       case kAnd:
-//        cout << "AND MODE" << endl;
+#ifdef ACCUMULATOR_SELECT
+        ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, NULL, kMaxNumResults);
+#else
         threshold = ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, top_k_scores, kMaxNumResults);
+#endif
         break;
       default:
         assert(false);
     }
 
-    // Prune accumulators.
-    // Compare the threshold value to the remainder function of each accumulator.
-    // Remove accumulators whose upperbound is lower than the threshold.
+    // Figure out the new upperbounds for each of the terms based on the layer max scores.
     for (int j = 0; j < num_query_terms; ++j) {
       term_upperbounds[j] = 0;
       // We start at 'i+1' since we just processed this layer, and all accumulator scores are updated from within the current layer.
@@ -543,9 +532,20 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
           break;
         }
       }
-//      cout << "Now, the upperbound is: " << term_upperbounds[j] << ", for term # : " << j << endl;
+#ifdef IRTK_DEBUG
+      cout << "Now, the upperbound for term #" << j << " is: " << term_upperbounds[j] << endl;
+#endif
     }
 
+#ifdef ACCUMULATOR_SELECT
+    // Try to find the threshold by using a select algorithm.
+    nth_element(accumulators, accumulators + kMaxNumResults - 1, accumulators + num_accumulators, AccumulatorScoreDescendingCompare());
+    threshold = accumulators[kMaxNumResults - 1].curr_score;
+#endif
+
+    // Prune accumulators.
+    // Compare the threshold value to the remainder function of each accumulator.
+    // Remove accumulators whose upperbound is lower than the threshold.
 
     // Here we calculate the upperbound for each accumulator, and remove those that can't possibly exceed the threshold.
     // We also compact the accumulator table here too, by moving accumulators together.
@@ -568,13 +568,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
       if (acc_upperbound < threshold) {
         // Remove accumulator.
         ++num_invalidated_accumulators;
-
-        //////////////////// TODO: Debug
-//        if (acc.doc_id == 1201796) {
-//          cout << "Partial -- invalidating accumulator: " << acc.doc_id << endl;
-//        }
-        /////////////////////////////////
-
       } else {
         // We move the accumulator left, to compact the array. Note that this does not affect any accumulators beyond this one.
         accumulators[j - num_invalidated_accumulators] = acc;
@@ -668,9 +661,7 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   return total_num_results;
 }
 
-// TODO: If the accumulator is sized to contain all docs in the collection, we can just update accumulators
-//       by finding them by their docID as the index.
-float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, float* top_k_scores, int k) {
+float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, float* top_k_scores, int k) {
   assert(list != NULL);
   assert(accumulators_array != NULL && *accumulators_array != NULL);
   assert(accumulators_array_size != NULL && *accumulators_array_size > 0);
@@ -681,7 +672,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
 
   // BM25 parameters: see 'http://en.wikipedia.org/wiki/Okapi_BM25'.
   const float kBm25K1 =  2.0;  // k1
-  const float kBm25B = 0.75;  // b
+  const float kBm25B = 0.75;   // b
 
   // We can precompute a few of the BM25 values here.
   const float kBm25NumeratorMul = kBm25K1 + 1;
@@ -706,9 +697,11 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
   while ((curr_doc_id = list->NextGEQ(curr_doc_id)) < ListData::kNoMoreDocs) {
     // Search for an accumulator corresponding to the current docID or insert if not found.
     while (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id < curr_doc_id) {
-      // Maintain the threshold score.
-      // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
-      threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
+      if (top_k_scores != NULL) {
+        // Maintain the threshold score.
+        // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
+        threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
+      }
 
       ++curr_accumulator_idx;
     }
@@ -718,25 +711,26 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
     doc_len = index_reader_.document_map().GetDocumentLength(curr_doc_id);
     partial_bm25_sum = idf_t * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
 
-    if (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id == curr_doc_id) { // Found a matching accumulator.
+    if (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id == curr_doc_id) {  // Found a matching accumulator.
       accumulators[curr_accumulator_idx].curr_score += partial_bm25_sum;
       accumulators[curr_accumulator_idx].term_bitmap |= (1 << list->term_num());
 
-      // Maintain the threshold score.
-      // This is for the updated accumulator scores.
-      threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
+      if (top_k_scores != NULL) {
+        // Maintain the threshold score.
+        // This is for the updated accumulator scores.
+        threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
+      }
 
       ++curr_accumulator_idx;
-    } else { // Need to insert accumulator.
+    } else {  // Need to insert accumulator.
       if (*num_accumulators >= accumulators_size) {
-        cout << "RESIZING ACCUMULATOR ARRAY: max_size: " << accumulators_size << ", curr_num_size: " << *num_accumulators << endl;
+#ifdef IRTK_DEBUG
+        cout << "Resizing accumulator array (curr size: " + *num_accumulators << ", new size: " << (*num_accumulators * 2) << ")." << endl;
+#endif
         // Resize accumulator array.
         *accumulators_array_size *= 2;
         Accumulator* new_accumulators = new Accumulator[*accumulators_array_size];
-        // TODO: Use memcpy here instead.
-        for (int i = 0; i < *num_accumulators; ++i) {
-          new_accumulators[i] = accumulators[i];
-        }
+        memcpy(new_accumulators, accumulators, (*num_accumulators) * sizeof(Accumulator));
         delete[] *accumulators_array;
         *accumulators_array = new_accumulators;
 
@@ -747,9 +741,11 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
       accumulators[*num_accumulators].curr_score = partial_bm25_sum;
       accumulators[*num_accumulators].term_bitmap = (1 << list->term_num());
 
-      // Maintain the threshold score.
-      // This is for the new accumulator scores.
-      threshold = KthScore(accumulators[*num_accumulators].curr_score, top_k_scores, num_top_k_scores++, k);
+      if (top_k_scores != NULL) {
+        // Maintain the threshold score.
+        // This is for the new accumulator scores.
+        threshold = KthScore(accumulators[*num_accumulators].curr_score, top_k_scores, num_top_k_scores++, k);
+      }
 
       ++(*num_accumulators);
     }
@@ -759,11 +755,11 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
 
   // Sort the accumulator array by docID.
   // Note that we only really need to sort any new accumulators we inserted and merge it with the already sorted part of the array.
-  // TODO: an in-place merge would still require a buffer if you want to take O(n) time instead of O(n log n)...
-  //       this is probably what strohman/croft meant when saying they always needed to allocate a new array for each segment...
-
-  // TODO: test your comparison operator.
   sort(accumulators + num_sorted_accumulators, accumulators + *num_accumulators);
+  // TODO: An in-place merge would still require a buffer if you want to take O(n) time instead of O(n*log(n))...
+  //       This is probably what Strohman/Croft meant, writing that they always needed to allocate a new array for each segment they process.
+  //       We don't do that here right now, so the merge below is free to implement either the O(n) or O(n*log(n)) scheme, depending on how much free memory is
+  //       available (according to the documentation).
   inplace_merge(accumulators, accumulators + num_sorted_accumulators, accumulators + *num_accumulators);
 
   // We return the threshold score.
@@ -773,7 +769,7 @@ float QueryProcessor::ProcessListLayer(ListData* list, Accumulator** accumulator
 float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, float* top_k_scores, int k) {
   // BM25 parameters: see 'http://en.wikipedia.org/wiki/Okapi_BM25'.
   const float kBm25K1 =  2.0;  // k1
-  const float kBm25B = 0.75;  // b
+  const float kBm25B = 0.75;   // b
 
   // We can precompute a few of the BM25 values here.
   const float kBm25NumeratorMul = kBm25K1 + 1;
@@ -793,6 +789,7 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
   uint32_t curr_doc_id;
   int num_top_k_scores = 0;
   float threshold = 0;
+
   while (accumulator_offset < num_accumulators) {
     curr_doc_id = list->NextGEQ(accumulators[accumulator_offset].doc_id);
     if (curr_doc_id == accumulators[accumulator_offset].doc_id) {
@@ -805,13 +802,17 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
       accumulators[accumulator_offset].curr_score += partial_bm25_sum;
       accumulators[accumulator_offset].term_bitmap |= (1 << list->term_num());
 
-      // Maintain the threshold score.
-      // This is for the updated accumulator scores.
-      threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
+      if (top_k_scores != NULL) {
+        // Maintain the threshold score.
+        // This is for the updated accumulator scores.
+        threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
+      }
     } else {
-      // Maintain the threshold score.
-      // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
-      threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
+      if (top_k_scores != NULL) {
+        // Maintain the threshold score.
+        // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
+        threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
+      }
     }
 
     ++accumulator_offset;
@@ -822,12 +823,12 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
 
 // This is used to keep track of the threshold value (the score of the k-th highest scoring accumulator).
 // The 'max_scores' array is assumed to be the size of at least 'kth_score'.
-// Returns the lowest score in the scores array if 'num_scores' is equal to 'kth_score' and 0 otherwise.
+// Returns the lowest score in the scores array if 'num_scores' is equal to 'kth_score', otherwise, the lowest possible float value.
 float QueryProcessor::KthScore(float new_score, float* scores, int num_scores, int kth_score) {
   // We use a min heap to determine the k-th largest score (the lowest score of the k scores we keep).
   // Notice that we don't have to explicitly make the heap, since it's assumed to be maintained from the start.
   if (num_scores < kth_score) {
-    // We insert a document if we don't have k documents yet.
+    // We insert a document score if we don't have k documents yet.
     scores[num_scores++] = new_score;
     push_heap(scores, scores + num_scores, greater<float> ());
   } else {
@@ -842,8 +843,11 @@ float QueryProcessor::KthScore(float new_score, float* scores, int num_scores, i
   if (num_scores < kth_score) {
     return -numeric_limits<float>::max();
   }
+
   return scores[0];
 }
+
+
 
 // This is for overlapping layers.
 // We can actually process more than 2 terms at a time as follows:

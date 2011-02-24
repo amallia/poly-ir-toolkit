@@ -116,7 +116,7 @@ public:
   int ProcessQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
   int ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
-  float ProcessListLayer(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, float* top_k_scores, int k);
+  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, float* top_k_scores, int k);
   float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, float* top_k_scores, int k);
 
   int ProcessLayeredQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
