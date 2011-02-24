@@ -38,6 +38,9 @@
 //#define MAX_SCORE_DEBUG
 //#define WAND_DEBUG
 
+// TODO: Top-k Scores vs Top-k Accumulators method.
+#define NEW_HEAP_METHOD
+
 #include <cassert>
 #include <stdint.h>
 
@@ -116,11 +119,12 @@ public:
   int ProcessQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
   int ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
-  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, float* top_k_scores, int k);
-  float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, float* top_k_scores, int k);
+  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, Accumulator** top_k_accumulators, int k);
+  float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, Accumulator** top_k_accumulators, int k);
 
   int ProcessLayeredQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
+  float KthAccumulator(Accumulator* new_accumulator, Accumulator** accumulators, int num_accumulators, int kth_score);
   float KthScore(float new_score, float* scores, int num_scores, int kth_score);
 
   int IntersectLists(ListData** lists, int num_lists, Result* results, int num_results);
@@ -239,6 +243,23 @@ struct AccumulatorScoreAscendingCompare {
     return l.curr_score < r.curr_score;
   }
 };
+
+
+
+
+/**************************************************************************************************************************************************************
+ * AccumulatorPointerScoreDescendingCompare
+ *
+ **************************************************************************************************************************************************************/
+struct AccumulatorPointerScoreDescendingCompare {
+  bool operator()(const Accumulator* l, const Accumulator* r) const {
+    return l->curr_score > r->curr_score;
+  }
+};
+
+
+
+
 
 /**************************************************************************************************************************************************************
  * ResultCompare

@@ -411,6 +411,12 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   //       fit within the 32 word limit.
   assert(num_query_terms <= static_cast<int>((sizeof(uint32_t) * 8)));
 
+#ifdef NEW_HEAP_METHOD
+  // TODO: For testing the new method for maintaining the threshold, the last bit is reserved for a flag that indicates whether the accumulator is currently in
+  //       the top-k heap, so this is reduced by one.
+  assert(num_query_terms <= static_cast<int>((sizeof(uint32_t) * 8)) - 1);
+#endif
+
   ListData* max_score_sorted_list_data_pointers[total_num_layers];  // Using a variable length array here.
   uint32_t max_num_accumulators = 0;
   int curr_layer = 0;
@@ -457,10 +463,12 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   // heap. Then, when we update the score of an accumulator that is in the heap, we'll do a make_heap() to preserve the heap property. When we remove an
   // accumulator pointer from the heap, we just set it's boolean flag (indicating whether it's in the heap) to false. make_heap() is a O(k) operation.
   // This scheme would be good when the majority of accumulators are not updated, that is, their score won't make it into the top-k. According to a sample
-  // query, there are significantly less updates than old accumulator scores. This method seems promising.
+  // query, there are significantly less updates than old accumulator scores. After testing, this method was significantly slower.
   // * Another solution is to use a select (quick-select) algorithm to find the k-th largest score from the accumulators. This can be done after finishing
   // processing a layer. This is a O(n) operation, where n is the number of accumulators. Note: after testing, this does not work too well in practice.
-  float top_k_scores[kMaxNumResults];  // Using a variable length array here.
+#ifdef NEW_HEAP_METHOD
+  Accumulator* top_k_accumulators[kMaxNumResults];  // Using a variable length array here.
+#endif
 
   float term_upperbounds[num_query_terms];  // Using a variable length array here.
 
@@ -500,10 +508,18 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
     //       sorted accumulator array.
     switch (curr_processing_mode) {
       case kOr:
-        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k_scores, kMaxNumResults);
+#ifdef NEW_HEAP_METHOD
+        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k_accumulators, kMaxNumResults);
+#else
+        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, NULL, kMaxNumResults);
+#endif
         break;
       case kAnd:
-        threshold = ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, top_k_scores, kMaxNumResults);
+#ifdef NEW_HEAP_METHOD
+        threshold = ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, top_k_accumulators, kMaxNumResults);
+#else
+        threshold = ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, NULL, kMaxNumResults);
+#endif
         break;
       default:
         assert(false);
@@ -642,11 +658,15 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   return total_num_results;
 }
 
-float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, float* top_k_scores, int k) {
+float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, Accumulator** top_k_accumulators, int k) {
   assert(list != NULL);
   assert(accumulators_array != NULL && *accumulators_array != NULL);
   assert(accumulators_array_size != NULL && *accumulators_array_size > 0);
   assert(*num_accumulators <= *accumulators_array_size);
+
+#ifndef NEW_HEAP_METHOD
+  float top_k_scores[kMaxNumResults];  // Using a variable length array here.
+#endif
 
   Accumulator* accumulators = *accumulators_array;
   int accumulators_size = *accumulators_array_size;
@@ -678,9 +698,12 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
   while ((curr_doc_id = list->NextGEQ(curr_doc_id)) < ListData::kNoMoreDocs) {
     // Search for an accumulator corresponding to the current docID or insert if not found.
     while (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id < curr_doc_id) {
+
+#ifndef NEW_HEAP_METHOD
       // Maintain the threshold score.
       // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
       threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
+#endif
 
       ++curr_accumulator_idx;
     }
@@ -694,9 +717,15 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
       accumulators[curr_accumulator_idx].curr_score += partial_bm25_sum;
       accumulators[curr_accumulator_idx].term_bitmap |= (1 << list->term_num());
 
+#ifndef NEW_HEAP_METHOD
       // Maintain the threshold score.
       // This is for the updated accumulator scores.
       threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
+#else
+      // Must rebuild the heap after we update the score.
+      make_heap(top_k_accumulators, top_k_accumulators + k, AccumulatorPointerScoreDescendingCompare());
+      threshold = top_k_accumulators[0]->curr_score;
+#endif
 
       ++curr_accumulator_idx;
     } else {  // Need to insert accumulator.
@@ -718,9 +747,13 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
       accumulators[*num_accumulators].curr_score = partial_bm25_sum;
       accumulators[*num_accumulators].term_bitmap = (1 << list->term_num());
 
+#ifndef NEW_HEAP_METHOD
       // Maintain the threshold score.
       // This is for the new accumulator scores.
       threshold = KthScore(accumulators[*num_accumulators].curr_score, top_k_scores, num_top_k_scores++, k);
+#else
+      threshold = KthAccumulator(&accumulators[*num_accumulators], top_k_accumulators, num_top_k_scores++, k);
+#endif
 
       ++(*num_accumulators);
     }
@@ -741,7 +774,14 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
   return threshold;
 }
 
-float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, float* top_k_scores, int k) {
+// TODO: Here it might make sense to use the old heap method...?
+float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, Accumulator** top_k_accumulators, int k) {
+  assert(list != NULL);
+  assert(accumulators != NULL);
+  assert(num_accumulators >= 0);
+
+  float top_k_scores[k];  // Using a variable length array here.
+
   // BM25 parameters: see 'http://en.wikipedia.org/wiki/Okapi_BM25'.
   const float kBm25K1 =  2.0;  // k1
   const float kBm25B = 0.75;   // b
@@ -792,6 +832,32 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
   return threshold;
 }
 
+float QueryProcessor::KthAccumulator(Accumulator* new_accumulator, Accumulator** accumulators, int num_accumulators, int kth_score) {
+  // We use a min heap to determine the k-th largest score (the lowest score of the k scores we keep).
+  // Notice that we don't have to explicitly make the heap, since it's assumed to be maintained from the start.
+  if (num_accumulators < kth_score) {
+    // We insert a document score if we don't have k documents yet.
+    new_accumulator->term_bitmap |= 1 << 31;  // Mark that this accumulator has been inserted into the top-k heap.
+    accumulators[num_accumulators++] = new_accumulator;
+    push_heap(accumulators, accumulators + num_accumulators, AccumulatorPointerScoreDescendingCompare());
+  } else {
+    if (new_accumulator > accumulators[0]) {
+      // We insert a score only if it is greater than the minimum score in the heap.
+      new_accumulator->term_bitmap |= 1 << 31;  // Mark that this accumulator has been inserted into the top-k heap.
+      pop_heap(accumulators, accumulators + kth_score, AccumulatorPointerScoreDescendingCompare());
+      accumulators[kth_score - 1]->term_bitmap &= ~(1 << 31);  // Unmark this accumulator (no longer in the heap).
+      accumulators[kth_score - 1] = new_accumulator;
+      push_heap(accumulators, accumulators + kth_score, AccumulatorPointerScoreDescendingCompare());
+    }
+  }
+
+  if (num_accumulators < kth_score) {
+    return -numeric_limits<float>::max();
+  }
+
+  return accumulators[0]->curr_score;
+}
+
 // This is used to keep track of the threshold value (the score of the k-th highest scoring accumulator).
 // The 'max_scores' array is assumed to be the size of at least 'kth_score'.
 // Returns the lowest score in the scores array if 'num_scores' is equal to 'kth_score', otherwise, the lowest possible float value.
@@ -817,7 +883,6 @@ float QueryProcessor::KthScore(float new_score, float* scores, int num_scores, i
 
   return scores[0];
 }
-
 
 
 // This is for overlapping layers.
