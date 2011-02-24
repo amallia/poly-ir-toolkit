@@ -460,12 +460,7 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   // query, there are significantly less updates than old accumulator scores. This method seems promising.
   // * Another solution is to use a select (quick-select) algorithm to find the k-th largest score from the accumulators. This can be done after finishing
   // processing a layer. This is a O(n) operation, where n is the number of accumulators. Note: after testing, this does not work too well in practice.
-
-//#define ACCUMULATOR_SELECT  // Define this to use a select algorithm to find the k-th largest accumulator score (the threshold).
-#ifndef ACCUMULATOR_SELECT
   float top_k_scores[kMaxNumResults];  // Using a variable length array here.
-  Accumulator* top_k_scores[kMaxNumResults];  // Using a variable length array here.
-#endif
 
   float term_upperbounds[num_query_terms];  // Using a variable length array here.
 
@@ -505,18 +500,10 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
     //       sorted accumulator array.
     switch (curr_processing_mode) {
       case kOr:
-#ifdef ACCUMULATOR_SELECT
-        ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, NULL, kMaxNumResults);
-#else
         threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k_scores, kMaxNumResults);
-#endif
         break;
       case kAnd:
-#ifdef ACCUMULATOR_SELECT
-        ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, NULL, kMaxNumResults);
-#else
         threshold = ProcessListLayerAnd(max_score_sorted_list_data_pointers[i], accumulators, num_accumulators, top_k_scores, kMaxNumResults);
-#endif
         break;
       default:
         assert(false);
@@ -536,12 +523,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
       cout << "Now, the upperbound for term #" << j << " is: " << term_upperbounds[j] << endl;
 #endif
     }
-
-#ifdef ACCUMULATOR_SELECT
-    // Try to find the threshold by using a select algorithm.
-    nth_element(accumulators, accumulators + kMaxNumResults - 1, accumulators + num_accumulators, AccumulatorScoreDescendingCompare());
-    threshold = accumulators[kMaxNumResults - 1].curr_score;
-#endif
 
     // Prune accumulators.
     // Compare the threshold value to the remainder function of each accumulator.
@@ -697,11 +678,9 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
   while ((curr_doc_id = list->NextGEQ(curr_doc_id)) < ListData::kNoMoreDocs) {
     // Search for an accumulator corresponding to the current docID or insert if not found.
     while (curr_accumulator_idx < num_sorted_accumulators && accumulators[curr_accumulator_idx].doc_id < curr_doc_id) {
-      if (top_k_scores != NULL) {
-        // Maintain the threshold score.
-        // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
-        threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
-      }
+      // Maintain the threshold score.
+      // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
+      threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
 
       ++curr_accumulator_idx;
     }
@@ -715,11 +694,9 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
       accumulators[curr_accumulator_idx].curr_score += partial_bm25_sum;
       accumulators[curr_accumulator_idx].term_bitmap |= (1 << list->term_num());
 
-      if (top_k_scores != NULL) {
-        // Maintain the threshold score.
-        // This is for the updated accumulator scores.
-        threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
-      }
+      // Maintain the threshold score.
+      // This is for the updated accumulator scores.
+      threshold = KthScore(accumulators[curr_accumulator_idx].curr_score, top_k_scores, num_top_k_scores++, k);
 
       ++curr_accumulator_idx;
     } else {  // Need to insert accumulator.
@@ -741,11 +718,9 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
       accumulators[*num_accumulators].curr_score = partial_bm25_sum;
       accumulators[*num_accumulators].term_bitmap = (1 << list->term_num());
 
-      if (top_k_scores != NULL) {
-        // Maintain the threshold score.
-        // This is for the new accumulator scores.
-        threshold = KthScore(accumulators[*num_accumulators].curr_score, top_k_scores, num_top_k_scores++, k);
-      }
+      // Maintain the threshold score.
+      // This is for the new accumulator scores.
+      threshold = KthScore(accumulators[*num_accumulators].curr_score, top_k_scores, num_top_k_scores++, k);
 
       ++(*num_accumulators);
     }
@@ -802,17 +777,13 @@ float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulat
       accumulators[accumulator_offset].curr_score += partial_bm25_sum;
       accumulators[accumulator_offset].term_bitmap |= (1 << list->term_num());
 
-      if (top_k_scores != NULL) {
-        // Maintain the threshold score.
-        // This is for the updated accumulator scores.
-        threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
-      }
+      // Maintain the threshold score.
+      // This is for the updated accumulator scores.
+      threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
     } else {
-      if (top_k_scores != NULL) {
-        // Maintain the threshold score.
-        // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
-        threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
-      }
+      // Maintain the threshold score.
+      // This is for all the old accumulators, whose scores we won't be updating, but still need to be accounted for.
+      threshold = KthScore(accumulators[accumulator_offset].curr_score, top_k_scores, num_top_k_scores++, k);
     }
 
     ++accumulator_offset;
