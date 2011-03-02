@@ -38,8 +38,9 @@
 //#define MAX_SCORE_DEBUG
 //#define WAND_DEBUG
 
-// TODO: Top-k Scores vs Top-k Accumulators method.
-#define NEW_HEAP_METHOD
+#define CUSTOM_HASH
+#define HASH_HEAP_METHOD_OR
+#define HASH_HEAP_METHOD_AND
 
 #include <cassert>
 #include <stdint.h>
@@ -55,7 +56,11 @@
 #include "index_layout_parameters.h"
 #include "index_reader.h"
 #include "index_util.h"
-
+#ifdef CUSTOM_HASH
+#include "integer_hash_table.h"
+#else
+#include <tr1/unordered_set>
+#endif
 /**************************************************************************************************************************************************************
  * QueryProcessor
  *
@@ -70,6 +75,13 @@ typedef std::pair<float, uint32_t> Result;
 
 class QueryProcessor {
 public:
+#ifdef CUSTOM_HASH
+  typedef OpenAddressedIntegerHashTable TopKTable;
+//  typedef ChainedIntegerHashTable TopKTable;
+#else
+  typedef std::tr1::unordered_set<uint32_t> TopKTable;
+#endif
+
   enum QueryAlgorithm {
     kDefault,  // The query algorithm to use will be the default one used for the type of index that's being queried.
     kDaatAnd,  // Standard DAAT processing with AND mode semantics.
@@ -119,13 +131,14 @@ public:
   int ProcessQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
   int ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
-  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, Accumulator** top_k_accumulators, int k);
-  float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, Accumulator** top_k_accumulators, int k);
+  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, std::pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k);
+  float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, std::pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k);
 
   int ProcessLayeredQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
-  float KthAccumulator(Accumulator* new_accumulator, Accumulator** accumulators, int num_accumulators, int kth_score);
-  float KthScore(float new_score, float* scores, int num_scores, int kth_score);
+  void KthAccumulator(const Accumulator& new_accumulator, std::pair<uint32_t, float>* accumulators, int num_accumulators, TopKTable& top_k_table, int kth_score);
+  void BubbleDownHeap(std::pair<uint32_t, float>* top_k, int top_k_size, int node_idx);
+  void KthScore(float new_score, float* scores, int num_scores, int kth_score);
 
   int IntersectLists(ListData** lists, int num_lists, Result* results, int num_results);
   int IntersectLists(ListData** merge_lists, int num_merge_lists, ListData** lists, int num_lists, Result* results, int num_results);
@@ -244,22 +257,15 @@ struct AccumulatorScoreAscendingCompare {
   }
 };
 
-
-
-
 /**************************************************************************************************************************************************************
- * AccumulatorPointerScoreDescendingCompare
+ * DocIdScorePairScoreDescendingCompare
  *
  **************************************************************************************************************************************************************/
-struct AccumulatorPointerScoreDescendingCompare {
-  bool operator()(const Accumulator* l, const Accumulator* r) const {
-    return l->curr_score > r->curr_score;
+struct DocIdScorePairScoreDescendingCompare {
+  bool operator()(const std::pair<uint32_t, float>& l, const std::pair<uint32_t, float>& r) const {
+    return l.second > r.second;
   }
 };
-
-
-
-
 
 /**************************************************************************************************************************************************************
  * ResultCompare
