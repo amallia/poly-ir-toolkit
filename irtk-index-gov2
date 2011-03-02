@@ -1,0 +1,22 @@
+#!/bin/bash
+
+IR_TOOLKIT_DIR="."
+
+echo "Switching to directory '$IR_TOOLKIT_DIR'"
+cd $IR_TOOLKIT_DIR
+
+echo "Indexing Gov2"
+time ./irtk --index < ../gov2_files_bench
+
+echo "Merging Gov2"
+time ./irtk --merge
+
+echo "Layering Gov2"
+time ./irtk --layerify
+
+echo "Generating URL sorted document mapping for Gov2"
+time ./irtk --generate-url-sorted-doc-mapping=url_sorted_doc_id_mapping < ../gov2_files_bench
+
+echo "Remapping Gov2"
+time ./irtk --remap=url_sorted_doc_id_mapping
+
