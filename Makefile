@@ -36,6 +36,7 @@ OBJS =		src/cache_manager.o \
 			src/index_reader.o \
 			src/index_remapper.o \
 			src/index_util.o \
+			src/integer_hash_table.o \
 			src/ir_toolkit.o \
 			src/key_value_store.o \
 			src/logger.o \
