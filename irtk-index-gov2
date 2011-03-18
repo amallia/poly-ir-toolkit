@@ -11,12 +11,26 @@ time ./irtk --index < ../gov2_files_bench
 echo "Merging Gov2"
 time ./irtk --merge
 
-echo "Layering Gov2"
+echo "Layering Gov2 with configuration specified parameters"
 time ./irtk --layerify
+
+echo "Renaming layered index to 'index_layered_default'"
+mv index_layered.idx index_layered_default.idx
+mv index_layered.lex index_layered_default.lex
+mv index_layered.meta index_layered_default.meta
+mv index_layered.ext index_layered_default.ext
+
+echo "Layering Gov2 with the following parameters: overlapping_layers=false, num_layers=8, layering_strategy=exponentially-increasing"
+time ./irtk --config-options=overlapping_layers=false\;num_layers=8\;layering_strategy=exponentially-increasing --layerify
+
+echo "Renaming layered index to 'index_layered_8_exp_non_overlapping'"
+mv index_layered.idx index_layered_8_exp_non_overlapping.idx
+mv index_layered.lex index_layered_8_exp_non_overlapping.lex
+mv index_layered.meta index_layered_8_exp_non_overlapping.meta
+mv index_layered.ext index_layered_8_exp_non_overlapping.ext
 
 echo "Generating URL sorted document mapping for Gov2"
 time ./irtk --generate-url-sorted-doc-mapping=url_sorted_doc_id_mapping < ../gov2_files_bench
 
 echo "Remapping Gov2"
 time ./irtk --remap=url_sorted_doc_id_mapping
-
