@@ -38,9 +38,10 @@
 //#define MAX_SCORE_DEBUG
 //#define WAND_DEBUG
 
-#define CUSTOM_HASH
-//#define HASH_HEAP_METHOD_OR
-//#define HASH_HEAP_METHOD_AND
+// Controls some settings for the ProcessLayeredTaatPrunedEarlyTerminatedQuery() algorithm.
+#define CUSTOM_HASH           // Our custom hash table performs slightly better than the C++0x one.
+#define HASH_HEAP_METHOD_OR   // Enable for much improved performance.
+#define HASH_HEAP_METHOD_AND  // Enable for much improved performance.
 
 #include <cassert>
 #include <stdint.h>
@@ -76,8 +77,9 @@ typedef std::pair<float, uint32_t> Result;
 class QueryProcessor {
 public:
 #ifdef CUSTOM_HASH
+  // The OpenAddressedIntegerHashTable performs slightly better than the ChainedIntegerHashTable for top-k, tested at k = 10 and k = 1000.
   typedef OpenAddressedIntegerHashTable TopKTable;
-//  typedef ChainedIntegerHashTable TopKTable;
+  /*typedef ChainedIntegerHashTable TopKTable;*/
 #else
   typedef std::tr1::unordered_set<uint32_t> TopKTable;
 #endif
@@ -131,8 +133,10 @@ public:
   int ProcessQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
   int ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
-  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, std::pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k);
-  float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, std::pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k);
+  float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators,
+                           std::pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k, int* total_num_accumulators_created);
+  float ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, std::pair<uint32_t, float>* top_k, int& num_top_k,
+                            TopKTable& top_k_table, int k);
 
   int ProcessLayeredQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 

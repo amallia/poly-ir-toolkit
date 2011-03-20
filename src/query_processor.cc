@@ -392,11 +392,8 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   int total_num_layers;
   OpenListLayers(query_term_data, num_query_terms, kMaxLayers, list_data_pointers, &single_term_query, &single_layer_list_idx, &total_num_layers);
 
-  // TODO: Let's use the total number of new accumulators created instead!
-  int total_num_results = 0;
-
   // TODO: We can only support queries of a certain length (32 words). Can fix this by doing unoptimized processing for the shortest lists which do not
-  //       fit within the 32 word limit.
+  //       fit within the 32 word limit. This is not an issue on our current query log.
   assert(num_query_terms <= static_cast<int>((sizeof(uint32_t) * 8)));
 
   ListData* max_score_sorted_list_data_pointers[total_num_layers];  // Using a variable length array here.
@@ -405,7 +402,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   for (int i = 0; i < num_query_terms; ++i) {
     for (int j = 0; j < query_term_data[i]->num_layers(); ++j) {
       max_score_sorted_list_data_pointers[curr_layer] = list_data_pointers[i][j];
-      total_num_results += list_data_pointers[i][j]->num_docs();
       ++curr_layer;
 
       max_num_accumulators += list_data_pointers[i][j]->num_docs();
@@ -415,7 +411,7 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
   // This is a very crude upperbound on the maximum number of accumulators we might need (the lists will have docIDs in common). This uses more memory, but
   // avoids resizing the accumulator array if we find that it's too small.
-  // TODO: If the accumulator array is sized to contain all docs in the collection, we can just update accumulators by finding them by their docID as the index.
+  // Note: If the accumulator array is sized to contain all docs in the collection, we can just update accumulators by finding them by their docID as the index.
   //       This is only necessary for OR mode processing. After it's safe to move into AND mode, we can just compact the array to get better locality and thus
   //       better cache performance.
   max_num_accumulators = min(max_num_accumulators, collection_total_num_docs_);
@@ -435,28 +431,33 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   float total_remainder = 0;  // The upperbound for the score of any new document encountered.
   int num_accumulators = 0;
 
-  // Necessary to keep track of the threshold. This is a min heap. For each layer we process, we need to keep track of the top-k scores to figure out the
+  // Necessary to keep track of the threshold. This is a min-heap. For each layer we process, we need to keep track of the top-k scores to figure out the
   // threshold. The big problem we have is that we need to reinitialize the heap before starting to process the next layer. We do this to handle updated
   // accumulators; when an accumulator is updated (and it's score is already in the heap), if we simply add it to the
   // heap again, we'll be artificially increasing the threshold score, which could lead to incorrect results. So, we have to reinitialize the heap and insert
   // every accumulator (whether updated or not) to the heap again. This method takes O(n*log(k)) where k is the number of scores we keep in the heap --- since
   // k is a constant, it's really O(n), but the constant factor is something to keep in mind.
-  // * Another solution is to keep Accumulator pointers in the heap, and for each accumulator, store a boolean field indicating whether its score is in the
-  // heap. Then, when we update the score of an accumulator that is in the heap, we'll do a make_heap() to preserve the heap property. When we remove an
-  // accumulator pointer from the heap, we just set it's boolean flag (indicating whether it's in the heap) to false. make_heap() is a O(k) operation.
+  // -----------------------------------------------------------------------------------------------------------------------------------------------------------
+  // Another solution is to keep a hash table of docIDs that are currently in the top-k heap. Then, when we update the score of an accumulator that is in the
+  // heap, we just check the hash table, which is a cheap operation. If we find that the accumulator is in the top-k, to update the score of this accumulator,
+  // we do have to linearly search the heap until we find the matching docID; we then can do a bubble down operation on just this accumulator (since it's score
+  // can only increase and this is a min-heap). If the accumulator is not in the top-k heap we can insert it if it's new score is greater than the min
+  // accumulator. When an accumulator is removed from the top-k heap, it must also be marked deleted or removed from the hash table.
   // This scheme would be good when the majority of accumulators are not updated, that is, their score won't make it into the top-k. According to a sample
-  // query, there are significantly less updates than old accumulator scores. After testing, this method was significantly slower.
-  // * Another solution is to use a select (quick-select) algorithm to find the k-th largest score from the accumulators. This can be done after finishing
+  // query, there are significantly less updates than old accumulator scores. This is the solution we use; it's benchmarked faster, more so for large values of
+  // top-k.
+  // -----------------------------------------------------------------------------------------------------------------------------------------------------------
+  // Another solution is to use a select (quick-select) algorithm to find the k-th largest score from the accumulators. This can be done after finishing
   // processing a layer. This is a O(n) operation, where n is the number of accumulators. Note: after testing, this does not work too well in practice.
 #ifdef HASH_HEAP_METHOD_OR
   pair<uint32_t, float> top_k[kMaxNumResults];  // Using a variable length array here.
 #endif
-  TopKTable top_k_table(kMaxNumResults);// Maps docIDs to a boolean value indicating whether the docID is present in the top-k heap.
-//  TopKTable top_k_table;
+  TopKTable top_k_table(kMaxNumResults);  // Indicates whether a docID is present in the top-k heap.
   int num_top_k = 0;
 
   float term_upperbounds[num_query_terms];  // Using a variable length array here.
 
+  int total_num_accumulators_created = 0;
   for (int i = 0; i < total_num_layers; ++i) {
 #ifdef IRTK_DEBUG
     cout << "Processing layer #" << i << ", with upperbound " << max_score_sorted_list_data_pointers[i]->score_threshold() << ", for term #"
@@ -482,14 +483,16 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
     }
 
     // Process postings based on the mode we're in.
-    // TODO: Look into using binary search on the accumulator array to find the docID we need. Binary search is a good option here since we always start with a
-    //       sorted accumulator array.
+    // Note: Look into using binary search on the accumulator array to find the docID we need.
+    //       Binary search is a good option here since we always start with a sorted accumulator array.
     switch (curr_processing_mode) {
       case kOr:
 #ifdef HASH_HEAP_METHOD_OR
-        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k, num_top_k, top_k_table, kMaxNumResults);
+        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, top_k, num_top_k,
+                                       top_k_table, kMaxNumResults, &total_num_accumulators_created);
 #else
-        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, NULL, num_top_k, top_k_table, kMaxNumResults);
+        threshold = ProcessListLayerOr(max_score_sorted_list_data_pointers[i], &accumulators, &accumulators_size, &num_accumulators, NULL, num_top_k,
+                                       top_k_table, kMaxNumResults, &total_num_accumulators_created);
 #endif
         break;
       case kAnd:
@@ -502,11 +505,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
       default:
         assert(false);
     }
-
-//    ////////////////
-//    cout << "HASH TABLE: " << endl;
-//    top_k_table.PrintTable();
-//    ///////////////
 
     // Figure out the new upperbounds for each of the terms based on the layer max scores.
     for (int j = 0; j < num_query_terms; ++j) {
@@ -545,7 +543,7 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
     // produced slightly lower latencies.
     // TODO: It's best to sort the new accumulators after we've removed those that can't make it...
     if (curr_processing_mode == kAnd /*|| curr_processing_mode == kOr*/) {
-      bool early_termination_condition_one = true; // No documents with current scores below the threshold can make it above the threshold.
+      bool early_termination_condition_one = true;  // No documents with current scores below the threshold can make it above the threshold.
       bool early_termination_condition_two = true;  // All documents with potential scores above the threshold cannot change their final order.
 
       // Prune accumulators.
@@ -589,8 +587,7 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
       cout << "Num Accumulators Remaining: " << num_accumulators << endl;
   #endif
 
-      // TODO:
-      // A problem that prevents us from early termination is when the upperbounds on some accumulators are all the same because of some low
+      // Note: A problem that prevents us from early termination is when the upperbounds on some accumulators are all the same because of some low
       // scoring layer and we can't guarantee rank safety because the current scores are too close.
       // A possible solution is to just make lookups for the remaining accumulators (say, we could do this when we narrowed down the list of top-k candidates to
       // just the k accumulators; but we don't know the exact ranks of these, so we can't terminate processing).
@@ -658,10 +655,14 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   }
 
   *num_results = min(num_accumulators, kMaxNumResults);
-  return total_num_results;
+
+  // We use the total number of accumulators created as the total number of results;
+  // there are possibly more results, but we couldn't count them because they couldn't make it into the top-k.
+  return total_num_accumulators_created;
 }
 
-float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators, pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k) {
+float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators,
+                                         pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k, int* total_num_accumulators_created) {
   assert(list != NULL);
   assert(accumulators_array != NULL && *accumulators_array != NULL);
   assert(accumulators_array_size != NULL && *accumulators_array_size > 0);
@@ -777,6 +778,7 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
 #endif
 
       ++(*num_accumulators);
+      ++(*total_num_accumulators_created);
     }
 
     ++curr_doc_id;
@@ -807,7 +809,8 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
 #endif
 }
 
-float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, pair<uint32_t, float>* top_k, int& num_top_k, TopKTable& top_k_table, int k) {
+float QueryProcessor::ProcessListLayerAnd(ListData* list, Accumulator* accumulators, int num_accumulators, pair<uint32_t, float>* top_k, int& num_top_k,
+                                          TopKTable& top_k_table, int k) {
   assert(list != NULL);
   assert(accumulators != NULL);
   assert(num_accumulators >= 0);
@@ -987,6 +990,8 @@ void QueryProcessor::KthScore(float new_score, float* scores, int num_scores, in
     }
   }
 }
+
+
 
 
 // This is for overlapping layers.
