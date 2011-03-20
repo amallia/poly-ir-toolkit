@@ -603,6 +603,7 @@ void SeekHelp() {
 
 void UnrecognizedOptionValue(const char* option_name, const char* option_value) {
   cout << "Option '" << string(option_name) << "' has an unrecognized value of '" << string(option_value) << "'" << endl;
+  exit(0);
 }
 
 // Assume we can load the whole file into main memory.
@@ -949,8 +950,8 @@ int main(int argc, char** argv) {
             command_line_args.query_mode = QueryProcessor::kInteractiveSingle;
           else if (strcmp("batch", optarg) == 0)
             command_line_args.query_mode = QueryProcessor::kBatch;
-          else if (strcmp("batch-all", optarg) == 0)
-            command_line_args.query_mode = QueryProcessor::kBatchAll;
+          else if (strcmp("batch-bench", optarg) == 0)
+            command_line_args.query_mode = QueryProcessor::kBatchBench;
           else
             UnrecognizedOptionValue(long_opts[long_index].name, optarg);
         } else if (strcmp("query-stop-list-file", long_opts[long_index].name) == 0) {

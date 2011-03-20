@@ -120,39 +120,30 @@ QueryProcessor::QueryProcessor(const IndexFiles& input_index_files, const char* 
     }
   }*/
 
-  // A parameter for batch mode processing. Helps with running some experiments. We just define it here (but perhaps better to make it more configurable).
-  // The percentage of total batch queries to use to generate statistics.
-  // The rest of the queries will be used to warm up the cache.
-  float percentage_test_queries = 0.01f;
-
   // For the case where we run batch queries, input can either come from stdin or from a file.
   // Reading input directly from a file is especially useful in case you can't redirect a file to stdin,
   // like when using gdb to debug (or at least I can't figure out how to do redirection when using gdb).
   string batch_query_input = IndexConfiguration::GetResultValue(Configuration::GetConfiguration().GetStringValue(config_properties::kBatchQueryInputFile), false);
-  ifstream batch_query_file_stream;
 
   switch (query_mode_) {
     case kInteractive:
     case kInteractiveSingle:
       AcceptQuery();
       break;
-    case kBatchAll:
-      // We redefine the parameter for this particular batch mode,
-      // which runs and times the execution of the whole query log,
-      // with no warm up and with silent mode enabled,
-      // and does not shuffle the queries prior to running them.
-      percentage_test_queries = 1.0f;
+
+    // In this mode, the query log will only be run once, and the output of each query will be printed to the screen.
     case kBatch:
-      if (batch_query_input.empty() || batch_query_input == "stdin" || batch_query_input == "cin") {
-        RunBatchQueries(cin, percentage_test_queries);
-      } else {
-        batch_query_file_stream.open(batch_query_input.c_str());
-        if (!batch_query_file_stream) {
-          GetErrorLogger().Log("Could not open batch query file '" + batch_query_input + "'.", true);
-        }
-        RunBatchQueries(batch_query_file_stream, percentage_test_queries);
-      }
+      silent_mode_ = false;
+      RunBatchQueries(batch_query_input, false, 1);
       break;
+
+    // In this mode, the query log will be run once without any timing to warm up the caches. Then, it will be run a second time to generate the timed run.
+    // These runs will be silent, with only the querying statistics being displayed at the end of the final run.
+    case kBatchBench:
+      silent_mode_ = true;
+      RunBatchQueries(batch_query_input, true, 1);
+      break;
+
     default:
       assert(false);
       break;
@@ -2504,6 +2495,9 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
   return total_num_results;
 }
 
+// In case of AND queries, we only count queries for which all terms are in the lexicon as part of the number of queries executed and the total elapsed querying
+// time. A query that contains terms which are not in the lexicon will just terminate with 0 results and 0 running time, so we ignore these for our benchmarking
+// purposes.
 void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   // All the words in the lexicon are lower case, so queries must be too, convert them to lower case.
   for (size_t i = 0; i < query_line.size(); i++) {
@@ -2675,10 +2669,17 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
           << setprecision(6) << " ms)\n";
 }
 
-// We only count queries for which all terms are in the lexicon as part of the number of queries executed and the total elapsed querying time.
-// This is because our query processor only supports AND queries; a query that contains terms which are not in the lexicon will just terminate
-// with 0 results and 0 running time, so we ignore these for our benchmarking purposes.
-void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries) {
+void QueryProcessor::RunBatchQueries(const string& input_source, bool warmup, int num_timed_runs) {
+  ifstream batch_query_file_stream;
+  if (!(input_source.empty() || input_source == "stdin" || input_source == "cin")) {
+    batch_query_file_stream.open(input_source.c_str());
+    if (!batch_query_file_stream) {
+      GetErrorLogger().Log("Could not open batch query file '" + input_source + "'.", true);
+    }
+  }
+
+  istream& is = batch_query_file_stream.is_open() ? batch_query_file_stream : cin;
+
   vector<pair<int, string> > queries;
   string query_line;
   while (getline(is, query_line)) {
@@ -2690,30 +2691,26 @@ void QueryProcessor::RunBatchQueries(istream& is, float percentage_test_queries)
     }
   }
 
-  if (percentage_test_queries != 1.0)
-    random_shuffle(queries.begin(), queries.end());
-
-  int num_test_queries = ceil(percentage_test_queries * queries.size());
-  int num_warm_up_queries = queries.size() - num_test_queries;
-
-  silent_mode_ = true;
-  warm_up_mode_ = true;
-  for (int i = 0; i < num_warm_up_queries; ++i) {
+  if (warmup) {
+    warm_up_mode_ = true;
+    for (int i = 0; i < static_cast<int> (queries.size()); ++i) {
 #ifdef IRTK_DEBUG
-    cout << queries[i].first << ":" << queries[i].second << endl;
+      cout << queries[i].first << ":" << queries[i].second << endl;
 #endif
-    ExecuteQuery(queries[i].second, queries[i].first);
+      ExecuteQuery(queries[i].second, queries[i].first);
+    }
+
+    index_reader_.ResetStats();
   }
 
-  index_reader_.ResetStats();
-
-  silent_mode_ = ((percentage_test_queries != 1.0) ? false : true);
   warm_up_mode_ = false;
-  for (int i = num_warm_up_queries; i < static_cast<int> (queries.size()); ++i) {
+  while (num_timed_runs-- > 0) {
+    for (int i = 0; i < static_cast<int> (queries.size()); ++i) {
 #ifdef IRTK_DEBUG
-    cout << queries[i].first << ":" << queries[i].second << endl;
+      cout << queries[i].first << ":" << queries[i].second << endl;
 #endif
-    ExecuteQuery(queries[i].second, queries[i].first);
+      ExecuteQuery(queries[i].second, queries[i].first);
+    }
   }
 }
 

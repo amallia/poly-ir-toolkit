@@ -39,8 +39,8 @@
 //#define WAND_DEBUG
 
 #define CUSTOM_HASH
-#define HASH_HEAP_METHOD_OR
-#define HASH_HEAP_METHOD_AND
+//#define HASH_HEAP_METHOD_OR
+//#define HASH_HEAP_METHOD_AND
 
 #include <cassert>
 #include <stdint.h>
@@ -106,7 +106,7 @@ public:
   };
 
   enum QueryMode {
-    kInteractive, kInteractiveSingle, kBatch, kBatchAll
+    kInteractive, kInteractiveSingle, kBatch, kBatchBench
   };
 
   enum ResultFormat {
@@ -150,8 +150,11 @@ public:
   int MergeListsMaxScore(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results, bool two_tiered);
 
   void ExecuteQuery(std::string query_line, int qid);
-  void RunBatchQueries(std::istream& is, float percentage_test_queries);
+
+  void RunBatchQueries(const std::string& input_source, bool warmup, int num_timed_runs);
+
   void LoadIndexProperties();
+
   void PrintQueryingParameters();
 
 private:
