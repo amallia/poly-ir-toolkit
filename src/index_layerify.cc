@@ -268,6 +268,7 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
             num_postings_curr_layer = max(num_postings_curr_layer, layer_min_sizes[i]);
           break;
         default:
+          num_postings_curr_layer = 0;
           assert(false);
           break;
       }
