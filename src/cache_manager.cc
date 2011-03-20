@@ -386,12 +386,12 @@ MemoryMappedCachePolicy::MemoryMappedCachePolicy(const char* index_filename) :
   index_ = static_cast<uint32_t*> (src);
 
   // Loop over the index to make sure it's been read into memory.
-  uint32_t index_data;
+  /*uint32_t index_data;
   assert(index_size_ % sizeof(*index_) == 0);
   uint64_t index_size_ints = index_size_ / sizeof(*index_);
   for (uint64_t i = 0; i < index_size_ints; ++i) {
     index_data = index_[i];
-  }
+  }*/
 }
 
 MemoryMappedCachePolicy::~MemoryMappedCachePolicy() {
