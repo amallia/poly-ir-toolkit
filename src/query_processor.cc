@@ -540,17 +540,12 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
     // A slight deviation from the published algorithm, we only prune the accumulators and check for the early termination conditions only if we're already in
     // AND mode; made on the observation that it's rare that we prune any accumulators before moving into AND mode processing. During benchmarking, this
-    // produced slightly lower latencies.
-    // TODO: It's best to sort the new accumulators after we've removed those that can't make it...
-    if (curr_processing_mode == kAnd /*|| curr_processing_mode == kOr*/) {
+    // produced lower latencies among a range of top-k.
+    if (curr_processing_mode == kAnd) {
       bool early_termination_condition_one = true;  // No documents with current scores below the threshold can make it above the threshold.
       bool early_termination_condition_two = true;  // All documents with potential scores above the threshold cannot change their final order.
 
-      // Prune accumulators.
-      // Compare the threshold value to the remainder function of each accumulator.
-      // Remove accumulators whose upperbound is lower than the threshold.
-
-      // Here we calculate the upperbound for each accumulator, and remove those that can't possibly exceed the threshold.
+      // Here we calculate the upperbound for each accumulator, and remove those whose upperbound is lower than the threshold.
       // We also compact the accumulator table here too, by moving accumulators together.
       int num_invalidated_accumulators = 0;
       for (int j = 0; j < num_accumulators; ++j) {
@@ -558,10 +553,6 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
 
         float acc_upperbound = acc.curr_score;
         for (int k = 0; k < num_query_terms; ++k) {
-          // Do a multiply and add operation without doing a branch.
-          // TODO: Need to make bit representing lack of a term score to be 1 instead of 0...
-//          acc_upperbound += ((acc.term_bitmap >> k) & 1) * term_upperbounds[k];
-
           if (((acc.term_bitmap >> k) & 1) == 0) {
             acc_upperbound += term_upperbounds[k];
           }
