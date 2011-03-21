@@ -778,11 +778,19 @@ float QueryProcessor::ProcessListLayerOr(ListData* list, Accumulator** accumulat
   // Sort the accumulator array by docID.
   // Note that we only really need to sort any new accumulators we inserted and merge it with the already sorted part of the array.
   sort(accumulators + num_sorted_accumulators, accumulators + *num_accumulators);
-  // TODO: An in-place merge would still require a buffer if you want to take O(n) time instead of O(n*log(n))...
+
+  // Note: An in-place merge would still require a buffer if you want to take O(n) time instead of O(n*log(n))...
   //       This is probably what Strohman/Croft meant, writing that they always needed to allocate a new array for each segment they process.
   //       We don't do that here right now, so the merge below is free to implement either the O(n) or O(n*log(n)) scheme, depending on how much free memory is
-  //       available (according to the documentation).
+  //       available (according to the documentation). The 'inplace_merge' used here is slightly faster in benchmarking than allocating another buffer and doing
+  //       a merge, as in the commented out code below.
   inplace_merge(accumulators, accumulators + num_sorted_accumulators, accumulators + *num_accumulators);
+
+  // Alternative to the 'inplace_merge' used above; this is slightly slower in practice.
+  /*Accumulator* merged_accumulators = new Accumulator[*accumulators_array_size];
+  merge (accumulators, accumulators + num_sorted_accumulators, accumulators + num_sorted_accumulators, accumulators + *num_accumulators, merged_accumulators);
+  delete[] *accumulators_array;
+  *accumulators_array = merged_accumulators;*/
 
 #ifdef HASH_HEAP_METHOD_OR
   // We return the threshold score.
