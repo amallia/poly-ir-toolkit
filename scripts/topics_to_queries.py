@@ -3,7 +3,7 @@
 Author: Roman Khmelichek
 
 Converts TREC ad hoc and named page retrieval topics to queries usable by
-PolyIRTK when used with the --query-mode=batch-all and --result-format=trec options.
+PolyIRTK when used with the --query-mode=batch and --result-format=trec options.
 '''
 import re
 import sys
