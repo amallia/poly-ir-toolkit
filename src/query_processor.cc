@@ -2507,6 +2507,13 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
   for (size_t i = 0; i < query_line.size(); i++) {
     if (isupper(query_line[i]))
       query_line[i] = tolower(query_line[i]);
+
+    // We need to remove punctuation from the queries, since we only index alphanumeric characters and anything separated by a non-alphanumeric
+    // character is considered a token separator by our parser. Not removing punctuation will result in the token not being found in the lexicon.
+    int int_val = query_line[i];
+    if (!((int_val >= 48 && int_val < 58) || (int_val >= 65 && int_val < 91) || (int_val >= 97 && int_val < 123) || (int_val == 32))) {
+      query_line[i] = ' ';  // Replace it with a space.
+    }
   }
 
   if (query_mode_ == kBatch) {
