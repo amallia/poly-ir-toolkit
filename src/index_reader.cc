@@ -827,6 +827,7 @@ LexiconData::LexiconData(const char* term, int term_len) :
 }
 
 LexiconData::~LexiconData() {
+  delete[] additional_layers_;
   delete[] term_;
 }
 
