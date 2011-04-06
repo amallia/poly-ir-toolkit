@@ -990,61 +990,49 @@ void QueryProcessor::KthScore(float new_score, float* scores, int num_scores, in
   }
 }
 
-
-
-
-// This is for overlapping layers.
+// This is for querying indices with dual overlapping layers.
 // We can actually process more than 2 terms at a time as follows:
-// say we have 3 lists, A, B, C (each with at most 2 layers, the higher levels having duplicated docID info):
+// Say we have 3 lists, A, B, C (each with at most 2 layers, the higher levels having duplicated docID info):
 // Process (A_1 x B x C), (B_1 x A x C), (C_1 x A x B), where A, B, C are the whole lists and A_1, B_1, C_1 are the first (or only) layers.
 // Note that intersecting all 3 terms should give good skipping performance.
-// We also assume, the whole index is in main memory.
+// We also assume that the whole index is in main memory.
 // Now, we can also run all 3 intersections in parallel (this should be good given that all 3 lists are in main memory).
-// Merge all the results using a heap. Or store the results in an array (which is then sorted) and the top results determined (preferable).
+// Merge all the results using a heap.  Or store the results in an array (which is then sorted) and the top results determined (preferable).
 // We only need k results from each of the 3 separate intersections.
-
+//
 // The drawback here (for queries that have lists with all layers) is you have to scan all the 2nd layers twice for the number of lists you have in the query.
 // (But we intersect with small lists and with good skipping performance (the index is in main memory, plus a block level index to skip decoding block headers),
 // so it makes the costs acceptable).
-
+//
 // Intersecting for more than 2 layers is redundant right now. That's why for 3 or more term queries, we get pretty high latencies.
-// IDEA: After each intersection, can already check the threshold...
-// if there are 3 lists A,B,C, then A_1 x B_2 x C_2 determines the intersection of the top A documents with everything else...including the top B and C since the layers are overlapping.
-// This is even true for 2 lists. After doing A_1 x B_2, we can check the kth score (if we got k scores in the intersection) against the threshold m(A_2) + m(B_1).
+// Idea: After each intersection, can already check the threshold...
+//       If there are 3 lists A,B,C, then A_1 x B_2 x C_2 determines the intersection of the top A documents with everything else...including the top B and C
+//       since the layers are overlapping.  This is even true for 2 lists.  After doing A_1 x B_2, we can check the kth score
+//       (if we got k scores in the intersection) against the threshold m(A_2) + m(B_1).
 //
-//
-
-// TODO: Two Bugs you need to fix:
-// TODO: FIX THIS ISSUE NEXT!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-//       * 10 results from each intersection is not enough since some of them are duplicates
-//       * Some docIDs appear more than once in the final results -- because heapifying only by score (the same docIDs have different scores for different intersections because of rounding errors during float addition).
-//         SOLUTION: don't sort by score in IntersectLists(), sort by the docIDs for each intersection, merge docIDs (output array needs to be num_query_terms*num_results large to fit everything, in case all docIDs are unique).
+// TODO: Two bugs that need fixing:
+//       * k results from each intersection is not enough since some of them are duplicates. Solution is to merge all the results --- see comments within
+//         function for more details.
+//       * Some docIDs appear more than once in the final results --- because heapifying only by score
+//         (the same docIDs have different scores for different intersections because of rounding errors during float addition).
+//         Solution: don't sort by score in IntersectLists(), sort by the docIDs for each intersection, merge docIDs
+//                   (output array needs to be 'num_query_terms' * 'num_results' large to fit everything, in case all docIDs are unique).
 //                   then after merging and eliminating duplicate docIDs, sort by score.
-//     Solution to the first issue: Merge the results.
 //
 // TODO: Find percentage of queries that can early terminate in each category of number of query terms.
-// TODO: Find out how much work is A_2 x B_2 vs A_1 x B_2 && B_1 x A_2. Do we traverse significantly less elements (when we are able to early terminate)? (And also for queries with more than 2 terms).
-//       If the answer is yes, we traverse less elements --- then it would be good to keep the A_2, B_2 lists decompressed in main memory, with the BM25 score precomputed. Otherwise, the costs of decompression and BM25 computation are too large overheads.
-
-/*
- * IDEA: Traverse all (or maybe some?) intersections in an interleaved manner. Then check threshold every N documents processed (after we get k unique docs) if we can early terminate on one of the intersections.
- *       We can also use the threshold info to skip chunks/blocks (if we store threshold info within the index or load it into main memory). This is because -- not all intersections are equal...some are gonna have lower max scores,
- *       the latter intersections due to IDF.
- *
- *
- */
-
-/*
- * When running layered vs non-layered comparison tests --- some docIDs with the same score differ
- *
- *  TODO: Also some results just plain are different --- investigate this!!!
- *        Query: 'cam glacier national park'
- *
- *  TODO: Implement:
- *        Non overlapping index; keep an unresolved docID pool and an upperbound score so we can eliminate documents.
- *
- *  TODO: Might be better to time the whole batch of queries instead of individually timing each one and summing up the times.
- */
+// TODO: Find out how much work is A_2 x B_2 vs A_1 x B_2 && B_1 x A_2. Do we traverse significantly less elements (when we are able to early terminate)?
+//       (And also for queries with more than 2 terms).
+//       If the answer is yes, we traverse less elements --- then it would be good to keep the A_2, B_2 lists decompressed in main memory, with the BM25 score
+//       precomputed. Otherwise, the costs of decompression and BM25 computation are too large overheads.
+//
+// Idea: Traverse all (or maybe some?) intersections in an interleaved manner. Then check threshold every N documents processed (after we get k unique docs)
+//       if we can early terminate on one of the intersections.  We can also use the threshold info to skip chunks/blocks
+//       if we store threshold info within the index or load it into main memory).  This is because not all intersections are equal...some are gonna have lower
+//       max scores, the latter intersections due to IDF.
+//
+// TODO: Investigate different result for the query 'cam glacier national park'.
+// TODO: Implement:
+//       Non overlapping index; keep an unresolved docID pool and an upperbound score so we can eliminate documents.
 int QueryProcessor::ProcessLayeredQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
   const int kMaxLayers = MAX_LIST_LAYERS;  // Assume our lists can contain this many layers.
   const int kMaxNumResults = *num_results;
@@ -1082,10 +1070,9 @@ int QueryProcessor::ProcessLayeredQuery(LexiconData** query_term_data, int num_q
       total_num_results = IntersectLists(merge_list_data_pointers, num_query_terms, curr_intersection_list_data_pointers, num_query_terms, results, kMaxNumResults);
       *num_results = min(total_num_results, kMaxNumResults);
     } else {
-      // TODO: I don't think it's enough for each intersection to return just k results
-      //       when there might be duplicate docIDs that we'll be filtering...
-      // This should probably be solved by writing a new function for intersect lists -- that will also combine the same docIDs from different list intersections right away
-      // so we do a merge of all the results in one step...
+      // TODO: It's not enough for each intersection to return just k results because there might be duplicate docIDs that we'll be filtering...
+      //       This should probably be solved by writing a new function for intersect lists --- that will also combine the same docIDs from different list
+      //       intersections right away so we do a merge of all the results in one step.
 
       Result all_results[num_query_terms][kMaxNumResults]; // Using a variable length array here.
       int num_intersection_results[num_query_terms]; // Using a variable length array here.
