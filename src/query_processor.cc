@@ -2518,7 +2518,7 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
   const int kNumLists = num_lists;                              // The number of lists we traverse.
   const int kMaxNumResults = num_results;                       // The maximum number of results we have to return.
-  const int kMaxPositions = MAX_FREQUENCY_PROPERTIES;           // The maximum number of positions for a docID in any list.
+  const int kMaxPositions = ChunkDecoder::kMaxProperties;       // The maximum number of positions for a docID in any list.
   const int kResultPositionStride = kMaxPositions + 1;          // For each result, per list, we store all the positions, plus an integer
                                                                 // indicating the number of positions stored.
   const int kResultStride = kNumLists * kResultPositionStride;  // For each result, we have 'num_lists' worth of position information.
@@ -2553,6 +2553,8 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
   uint32_t did = 0;
   uint32_t d;
+
+  uint32_t num_positions;
 
   int i, j;
 
@@ -2600,8 +2602,9 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
         result_position_tuples[total_num_results].score = bm25_sum;
         result_position_tuples[total_num_results].positions = &position_pool[total_num_results * kResultStride];
         for (i = 0; i < kNumLists; ++i) {
-          result_position_tuples[total_num_results].positions[i * kResultPositionStride] = f_d_t[i];
-          memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i] * sizeof(*positions_d_t[i]));
+          num_positions = min(f_d_t[i], static_cast<uint32_t>(kMaxPositions));
+          result_position_tuples[total_num_results].positions[i * kResultPositionStride] = num_positions;
+          memcpy(&result_position_tuples[total_num_results].positions[(i * kResultPositionStride) + 1], positions_d_t[i], num_positions * sizeof(*positions_d_t[i]));
         }
         push_heap(result_position_tuples, result_position_tuples + total_num_results + 1);
       } else {
@@ -2613,8 +2616,9 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
           result_position_tuples[kNumTopPositionsToScore - 1].score = bm25_sum;
           // Replace the positions.
           for (i = 0; i < kNumLists; ++i) {
-            result_position_tuples[kNumTopPositionsToScore - 1].positions[i * kResultPositionStride] = f_d_t[i];
-            memcpy(&result_position_tuples[kNumTopPositionsToScore - 1].positions[(i * kResultPositionStride) + 1], positions_d_t[i], f_d_t[i] * sizeof(*positions_d_t[i]));
+            num_positions = min(f_d_t[i], static_cast<uint32_t>(kMaxPositions));
+            result_position_tuples[kNumTopPositionsToScore - 1].positions[i * kResultPositionStride] = num_positions;
+            memcpy(&result_position_tuples[kNumTopPositionsToScore - 1].positions[(i * kResultPositionStride) + 1], positions_d_t[i], num_positions * sizeof(*positions_d_t[i]));
           }
           push_heap(result_position_tuples, result_position_tuples + num_results);
         }
@@ -2645,11 +2649,11 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
 
   for (r = 0; r < kNumReturnedResults; ++r) {
     for (i = 0; i < kNumLists; ++i) {
-      num_positions_top = min(result_position_tuples[r].positions[i * kResultPositionStride], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
+      num_positions_top = result_position_tuples[r].positions[i * kResultPositionStride];
       positions_top = &result_position_tuples[r].positions[i * kResultPositionStride + 1];
 
       for (j = i + 1; j < kNumLists; ++j) {
-        num_positions_bottom = min(result_position_tuples[r].positions[j * kResultPositionStride], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
+        num_positions_bottom = result_position_tuples[r].positions[j * kResultPositionStride];
         positions_bottom = &result_position_tuples[r].positions[j * kResultPositionStride + 1];
 
         positions_top_actual = 0;  // Positions are stored gap coded for each document and we need to decode the gaps on the fly.
@@ -2682,7 +2686,7 @@ int QueryProcessor::IntersectListsTopPositions(ListData** lists, int num_lists, 
     for (j = 0; j < kNumLists; ++j) {
       cout << "Positions for list: " << j << endl;
       const uint32_t* positions = &result_position_tuples[i].positions[j * kResultPositionStride];
-      uint32_t num_positions = min(positions[0], static_cast<uint32_t> (ChunkDecoder::kMaxProperties));
+      uint32_t num_positions = positions[0];
       ++positions;
       for (k = 0; k < num_positions; ++k) {
         cout << positions[k] << endl;
