@@ -380,6 +380,226 @@ void QueryProcessor::CloseListLayers(int num_query_terms, int max_layers, ListDa
   }
 }
 
+// A DAAT based approach to multi-layered, non-overlapping lists.
+// This is an exhaustive algorithm. For optimization, use WAND or MaxScore.
+/*int QueryProcessor::ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
+  const int kMaxLayers = MAX_LIST_LAYERS;  // Assume our lists can contain this many layers.
+  const int kMaxNumResults = *num_results;
+
+  ListData* list_data_pointers[num_query_terms][kMaxLayers];  // Using a variable length array here.
+  bool single_term_query;
+  int single_layer_list_idx;
+  int total_num_layers;
+  OpenListLayers(query_term_data, num_query_terms, kMaxLayers, list_data_pointers, &single_term_query, &single_layer_list_idx, &total_num_layers);
+
+  ListData** lists = new ListData*[total_num_layers];
+  int curr_layer = 0;
+  for (int i = 0; i < num_query_terms; ++i) {
+    for (int j = 0; j < query_term_data[i]->num_layers(); ++j) {
+      lists[curr_layer] = list_data_pointers[i][j];
+      ++curr_layer;
+    }
+  }
+
+  int total_num_results = MergeLists(lists, total_num_layers, results, kMaxNumResults);
+
+  // Clean up.
+  for (int i = 0; i < num_query_terms; ++i) {
+    for (int j = 0; j < kMaxLayers; ++j) {
+      index_reader_.CloseList(list_data_pointers[i][j]);
+    }
+  }
+
+  *num_results = min(total_num_results, kMaxNumResults);
+
+  delete[] lists;
+  return total_num_results;
+}*/
+
+// A DAAT based approach to multi-layered, non-overlapping lists. This is using MaxScore to speed stuff up.
+// TODO: Would be interesting to make equal sized layers...
+int QueryProcessor::ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
+  const int kMaxLayers = MAX_LIST_LAYERS;  // Assume our lists can contain this many layers.
+  const int kMaxNumResults = *num_results;
+
+  ListData* lists[num_query_terms][kMaxLayers];  // Using a variable length array here.
+  bool single_term_query;
+  int single_layer_list_idx;
+  int total_num_layers;
+  OpenListLayers(query_term_data, num_query_terms, kMaxLayers, lists, &single_term_query, &single_layer_list_idx, &total_num_layers);
+
+  ListData* list_data_pointers[total_num_layers];  // Using a variable length array here.
+  int curr_layer = 0;
+  for (int i = 0; i < num_query_terms; ++i) {
+    for (int j = 0; j < query_term_data[i]->num_layers(); ++j) {
+      list_data_pointers[curr_layer] = lists[i][j];
+      ++curr_layer;
+    }
+  }
+
+  // For MaxScore to work correctly, need term upperbounds on the whole list.
+  float list_thresholds[total_num_layers];  // Using a variable length array here.
+  for (int i = 0; i < total_num_layers; ++i) {
+    list_thresholds[i] = list_data_pointers[i]->score_threshold();
+#ifdef IRTK_DEBUG
+    cout << "Layer for Term Num: " << list_data_pointers[i]->term_num()
+        << ", Layer Num: 0, Score Threshold: " << list_data_pointers[i]->score_threshold()
+        << ", Num Docs: " << list_data_pointers[i]->num_docs()
+        << ", Num Blocks: " << list_data_pointers[i]->num_blocks()
+        << ", Num Chunks: " << list_data_pointers[i]->num_chunks() << endl;
+#endif
+  }
+
+  int total_num_results = 0;
+
+  float threshold = 0;
+
+  // BM25 parameters: see 'http://en.wikipedia.org/wiki/Okapi_BM25'.
+  const float kBm25K1 = 2.0; // k1
+  const float kBm25B = 0.75; // b
+
+  // We can precompute a few of the BM25 values here.
+  const float kBm25NumeratorMul = kBm25K1 + 1;
+  const float kBm25DenominatorAdd = kBm25K1 * (1 - kBm25B);
+  const float kBm25DenominatorDocLenMul = kBm25K1 * kBm25B / collection_average_doc_len_;
+
+  // BM25 components.
+  float bm25_sum; // The BM25 sum for the current document we're processing in the intersection.
+  int doc_len;
+  uint32_t f_d_t;
+
+  // Compute the inverse document frequency component. It is not document dependent, so we can compute it just once for each list.
+  float idf_t[total_num_layers]; // Using a variable length array here.
+  int num_docs_t;
+  for (int i = 0; i < total_num_layers; ++i) {
+    num_docs_t = list_data_pointers[i]->num_docs_complete_list();
+    idf_t[i] = log10(1 + (collection_total_num_docs_ - num_docs_t + 0.5) / (num_docs_t + 0.5));
+  }
+
+  // We use this to get the next lowest docID from all the lists.
+  uint32_t lists_curr_postings[total_num_layers]; // Using a variable length array here.
+  for (int i = 0; i < total_num_layers; ++i) {
+    lists_curr_postings[i] = list_data_pointers[i]->NextGEQ(0);
+  }
+
+  pair<float, int> list_upperbounds[total_num_layers]; // Using a variable length array here.
+  int num_lists_remaining = 0; // The number of lists with postings remaining.
+  for (int i = 0; i < total_num_layers; ++i) {
+    if (lists_curr_postings[i] != ListData::kNoMoreDocs) {
+      list_upperbounds[num_lists_remaining++] = make_pair(list_thresholds[i], i);
+    }
+  }
+
+  sort(list_upperbounds, list_upperbounds + num_lists_remaining, greater<pair<float, int> > ());
+
+  // Precalculate the upperbounds for all possibilities.
+  for (int i = num_lists_remaining - 2; i >= 0; --i) {
+    list_upperbounds[i].first += list_upperbounds[i + 1].first;
+  }
+
+  int i, j;
+  int curr_list_idx;
+  pair<float, int>* top;
+  uint32_t curr_doc_id; // Current docID we're processing the score for.
+
+  while (num_lists_remaining) {
+    top = &list_upperbounds[0];
+    // Find the lowest docID that can still possibly make it into the top-k (while being able to make it into the top-k).
+    for (i = 1; i < num_lists_remaining; ++i) {
+      curr_list_idx = list_upperbounds[i].second;
+      if (threshold > list_upperbounds[i].first) {
+        break;
+      }
+
+      if (lists_curr_postings[curr_list_idx] < lists_curr_postings[top->second]) {
+        top = &list_upperbounds[i];
+      }
+    }
+
+    // Check if we can early terminate. This might happen only after we have finished traversing at least one list.
+    // This is because our upperbounds don't decrease unless we are totally finished traversing one list.
+    // Must check this since we initialize top to point to the first element in the list upperbounds array by default.
+    if (threshold > list_upperbounds[0].first) {
+      break;
+    }
+
+    // At this point, 'curr_doc_id' can either not be able to exceed the threshold score, or it can be the max possible docID sentinel value.
+    curr_doc_id = lists_curr_postings[top->second];
+
+    // We score a docID fully here, making any necessary lookups right away into other lists.
+    // Disadvantage with this approach is that you'll be doing a NextGEQ() more than once for some lists on the same docID.
+    bm25_sum = 0;
+    for (i = 0; i < num_lists_remaining; ++i) {
+      curr_list_idx = list_upperbounds[i].second;
+
+      // Check if we can early terminate the scoring of this particular docID.
+      if (threshold > bm25_sum + list_upperbounds[i].first) {
+        break;
+      }
+
+      // Move to the curr docID we're scoring.
+      lists_curr_postings[curr_list_idx] = list_data_pointers[curr_list_idx]->NextGEQ(curr_doc_id);
+
+      if (lists_curr_postings[curr_list_idx] == curr_doc_id) {
+        // Compute BM25 score from frequencies.
+        f_d_t = list_data_pointers[curr_list_idx]->GetFreq();
+        doc_len = index_reader_.document_map().GetDocumentLength(lists_curr_postings[curr_list_idx]);
+        bm25_sum += idf_t[curr_list_idx] * (f_d_t * kBm25NumeratorMul) / (f_d_t + kBm25DenominatorAdd + kBm25DenominatorDocLenMul * doc_len);
+
+        ++num_postings_scored_;
+
+        // Can now move the list pointer further.
+        lists_curr_postings[curr_list_idx] = list_data_pointers[curr_list_idx]->NextGEQ(lists_curr_postings[curr_list_idx] + 1);
+      }
+
+      if (lists_curr_postings[curr_list_idx] == ListData::kNoMoreDocs) {
+        --num_lists_remaining;
+        float curr_list_upperbound = list_thresholds[curr_list_idx];
+
+        // Compact the list upperbounds array.
+        for (j = i; j < num_lists_remaining; ++j) {
+          list_upperbounds[j] = list_upperbounds[j + 1];
+        }
+
+        // Recalculate the list upperbounds. Note that we only need to recalculate those entries less than i.
+        for (j = 0; j < i; ++j) {
+          list_upperbounds[j].first -= curr_list_upperbound;
+        }
+        --i;
+      }
+    }
+
+    // Need to keep track of the top-k documents.
+    if (total_num_results < kMaxNumResults) {
+      // We insert a document if we don't have k documents yet.
+      results[total_num_results] = make_pair(bm25_sum, curr_doc_id);
+      push_heap(results, results + total_num_results + 1, ResultCompare());
+    } else {
+      if (bm25_sum > results->first) {
+        // We insert a document only if it's score is greater than the minimum scoring document in the heap.
+        pop_heap(results, results + kMaxNumResults, ResultCompare());
+        results[kMaxNumResults - 1].first = bm25_sum;
+        results[kMaxNumResults - 1].second = curr_doc_id;
+        push_heap(results, results + kMaxNumResults, ResultCompare());
+
+        // Update the threshold.
+        threshold = results->first;
+      }
+    }
+    ++total_num_results;
+  }
+
+  // Sort top-k results in descending order by document score.
+  sort(results, results + min(kMaxNumResults, total_num_results), ResultCompare());
+
+  *num_results = min(total_num_results, kMaxNumResults);
+  for (int i = 0; i < total_num_layers; ++i) {
+    index_reader_.CloseList(list_data_pointers[i]);
+  }
+
+  return total_num_results;
+}
+
 // Implements approach described by Anh/Moffat with improvements by Strohman/Croft, but with standard BM25 scoring, instead of impacts.
 // This technique is not score safe, but it is still rank safe.
 int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
@@ -1334,8 +1554,8 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
   }
 
   // We use this to get the next lowest docID from all the lists.
-  pair<uint32_t, int> lists_curr_postings[num_lists]; // Using a variable length array here.
-  int num_lists_remaining = 0; // The number of lists with postings remaining.
+  pair<uint32_t, int> lists_curr_postings[num_lists];  // Using a variable length array here.
+  int num_lists_remaining = 0;  // The number of lists with postings remaining.
   for (int i = 0; i < num_lists; ++i) {
     uint32_t curr_doc_id;
     if ((curr_doc_id = lists[i]->NextGEQ(0)) < ListData::kNoMoreDocs) {
@@ -1378,12 +1598,12 @@ int QueryProcessor::MergeLists(ListData** lists, int num_lists, Result* results,
       }
     }
 
-    if(kScoreCompleteDoc) {
+    if (kScoreCompleteDoc) {
       curr_doc_id = top->first;
       bm25_sum = 0;
       // Can start searching from the position of 'top' since it'll be the first lowest element in the array.
       while (top != &lists_curr_postings[num_lists_remaining]) {
-        if(top->first == curr_doc_id) {
+        if (top->first == curr_doc_id) {
           // Compute BM25 score from frequencies.
           f_d_t = lists[top->second]->GetFreq();
           doc_len = index_reader_.document_map().GetDocumentLength(top->first);
@@ -2550,6 +2770,7 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
       processing_semantics = kAnd;
       break;
     case kDaatOr:
+    case kMultiLayeredDaatOr:
     case kLayeredTaatOrEarlyTerminated:
     case kWand:
     case kDualLayeredWand:
@@ -2600,6 +2821,9 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
       case kDualLayeredOverlappingDaat:
       case kDualLayeredOverlappingMergeDaat:
         total_num_results = ProcessLayeredQuery(query_term_data, num_query_terms, ranked_results, &results_size);
+        break;
+      case kMultiLayeredDaatOr:
+        total_num_results = ProcessMultiLayeredDaatOrQuery(query_term_data, num_query_terms, ranked_results, &results_size);
         break;
       case kLayeredTaatOrEarlyTerminated:
         total_num_results = ProcessLayeredTaatPrunedEarlyTerminatedQuery(query_term_data, num_query_terms, ranked_results, &results_size);
@@ -2778,6 +3002,7 @@ void QueryProcessor::LoadIndexProperties() {
       }
       break;
     case kLayeredTaatOrEarlyTerminated:
+    case kMultiLayeredDaatOr:
       if (!index_layered_ || index_overlapping_layers_) {
         inappropriate_algorithm = true;
       }

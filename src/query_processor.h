@@ -97,6 +97,7 @@ public:
     kDualLayeredOverlappingMergeDaat,  // The first layers are merged into a single list and this list is then intersected with all the second layers.
 
     kLayeredTaatOrEarlyTerminated,  // TAAT processing on a multiple layered, but not overlapping index. Early termination possible. Also has accumulator trimming.
+    kMultiLayeredDaatOr,
 
     kWand,
     kDualLayeredWand,
@@ -131,6 +132,8 @@ public:
   void CloseListLayers(int num_query_terms, int max_layers, ListData* list_data_pointers[][MAX_LIST_LAYERS]);
 
   int ProcessQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
+
+  int ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
 
   int ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results);
   float ProcessListLayerOr(ListData* list, Accumulator** accumulators_array, int* accumulators_array_size, int* num_accumulators,
