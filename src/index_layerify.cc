@@ -172,11 +172,37 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
   // Additional details for the above layering strategies.
   // TODO: Should be able to define these in the configuration file.
-  int layer_percentages[] = { 5, 5, 10, 15, 25, 40, 0, 0 };
+
+  //////////////////////////////////////////////////////////////////////////////
+  // Standard.
+//  int layer_percentages[] = { 5, 5, 10, 15, 25, 40, 0, 0 };
+//  // Set the minimum number of postings in each layer, 0 means no limit.
+//  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072 };
+//  // Set the maximum number of postings in each layer, 0 means no limit.
+//  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0, 0, 0 };
+
+//  // Equal.
+//  int layer_percentages[] = { 10, 10, 10, 10, 15, 15, 15, 15 };
+//  // Set the minimum number of postings in each layer, 0 means no limit.
+//  int layer_min_sizes[] = { 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024 };
+//  // Set the maximum number of postings in each layer, 0 means no limit.
+//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+  // Equal. Only a few layers.
+  int layer_percentages[] = { 25, 25, 25, 25 };
   // Set the minimum number of postings in each layer, 0 means no limit.
-  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072 };
+  int layer_min_sizes[] = { 4096, 4096, 4096, 4096 };
   // Set the maximum number of postings in each layer, 0 means no limit.
-  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0, 0, 0 };
+  int layer_max_sizes[] = { 0, 0, 0, 0 };
+
+//  // Subsequent layers doubled (starting from 65536 postings). Last layer will have everything that remains.
+//  int layer_percentages[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+//  // Set the minimum number of postings in each layer, 0 means no limit.
+//  int layer_min_sizes[] = { 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608 };
+//  // Set the maximum number of postings in each layer, 0 means no limit.
+//  int layer_max_sizes[] = { 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608 };
+
+  //////////////////////////////////////////////////////////////////////////////
 
   // Test that the index layering properties make sense.
   if (num_layers_ > kMaxLayers) {
@@ -285,6 +311,13 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
       }
 
       num_postings_left -= num_postings_curr_layer;
+
+      // If the next layer will have less postings than the current layer, we will make the current layer the last layer by putting all the
+      // remaining postings into it.
+      if (num_postings_left < num_postings_curr_layer) {
+        num_postings_curr_layer += num_postings_left;
+        num_postings_left = 0;
+      }
 
       // Make sure that if this is the last layer, it contains all the remaining postings.
       if (i == (num_layers_ - 1) && num_postings_left > 0) {
