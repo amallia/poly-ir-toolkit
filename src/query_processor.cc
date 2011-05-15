@@ -132,8 +132,12 @@ QueryProcessor::QueryProcessor(const IndexFiles& input_index_files, const char* 
       break;
 
     // In this mode, the query log will only be run once, and the output of each query will be printed to the screen.
+    // If running in mode for TREC results, we will suppress some output, so as not to interfere with the 'trec_eval' program.
     case kBatch:
-      silent_mode_ = false;
+      if (result_format_ == kTrec)
+        silent_mode_ = true;
+      else
+        silent_mode_ = false;
       RunBatchQueries(batch_query_input, false, 1);
       break;
 
