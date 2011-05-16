@@ -1772,7 +1772,7 @@ int QueryProcessor::MergeListsWand(LexiconData** query_term_data, int num_query_
   }
 
   int total_num_results = 0;
-  if (num_query_terms == 1) {
+  if (num_query_terms == 1 && two_tiered) {  // We do this optimization only if we have explicitly specified two-tier mode.
     // Do standard DAAT OR mode processing, since WAND won't help.
     if (index_layered_ && query_term_data[0]->num_layers() == 2) {
       // We have two layers, so let's run the standard DAAT OR on the first layer only.
@@ -2044,7 +2044,7 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
   }
 
   int total_num_results = 0;
-  if (num_query_terms == 1) {
+  if (num_query_terms == 1 && two_tiered) {  // We do this optimization only if we have explicitly specified two-tier mode.
     // Do standard DAAT OR mode processing, since Max Score won't help.
     if (index_layered_ && query_term_data[0]->num_layers() == 2) {
       // We have two layers, so let's run the standard DAAT OR on the first layer only.
