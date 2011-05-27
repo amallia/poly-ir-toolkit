@@ -2178,6 +2178,13 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
     /*bool compact_upperbounds = false;*/
 
     while (num_lists_remaining) {
+      // Check if we can early terminate. This might happen only after we have finished traversing at least one list.
+      // This is because our upperbounds don't decrease unless we are totally finished traversing one list.
+      // Must check this since we initialize top to point to the first element in the list upperbounds array by default.
+      if (threshold > list_upperbounds[0].first) {
+        break;
+      }
+
       top = &list_upperbounds[0];
       if (kScoreSkipping && threshold > list_upperbounds[1].first) {
 #ifdef MAX_SCORE_DEBUG
@@ -2207,13 +2214,6 @@ int QueryProcessor::MergeListsMaxScore(LexiconData** query_term_data, int num_qu
             top = &list_upperbounds[i];
           }
         }
-      }
-
-      // Check if we can early terminate. This might happen only after we have finished traversing at least one list.
-      // This is because our upperbounds don't decrease unless we are totally finished traversing one list.
-      // Must check this since we initialize top to point to the first element in the list upperbounds array by default.
-      if (threshold > list_upperbounds[0].first) {
-        break;
       }
 
       // At this point, 'curr_doc_id' can either not be able to exceed the threshold score, or it can be the max possible docID sentinel value.
