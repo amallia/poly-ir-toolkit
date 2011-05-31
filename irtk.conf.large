@@ -69,7 +69,7 @@ indexing_block_header_coding = pfor:256:s16:192
 
 # Controls whether files that have already been merged should be deleted.
 # Saves considerable disk space.
-delete_merged_files = true
+delete_merged_files = false
 
 # See the indexing section for a description of the coding policies.
 #
