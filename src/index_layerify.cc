@@ -154,7 +154,9 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   };
 
   LayerSplitMode layer_splitting_strategy;
-  if (layering_strategy_ == "percentage-lower-bounded") {
+
+  // TODO: Disable for now...
+  /*if (layering_strategy_ == "percentage-lower-bounded") {
     layer_splitting_strategy = kPercentageLowerBounded;
   } else if (layering_strategy_ == "percentage-lower-upper-bounded") {
     layer_splitting_strategy = kPercentageLowerUpperBounded;
@@ -163,7 +165,7 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   } else {
     layer_splitting_strategy = kUndefined;
     Configuration::ErroneousValue(config_properties::kLayeringStrategy, Stringify(layering_strategy_));
-  }
+  }*/
 
   // If we have overlapping layers, should the threshold score include the overlapping documents?
   // This should generally be set to 'false', since all layers will then have the same threshold stored,
@@ -178,71 +180,202 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   overlapping_layers_ = false;
   int min_layer_size = 32768;
 
-//  // EQUAL --- 2 LAYERS
-//  num_layers_ = 2;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 50.0, 50.0 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0 };
+  float layer_percentages[MAX_LIST_LAYERS];
+  int layer_min_sizes[MAX_LIST_LAYERS];
+  int layer_max_sizes[MAX_LIST_LAYERS];
 
-//  // EQUAL --- 4 LAYERS
-//  num_layers_ = 4;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 25.0, 25.0, 25.0, 25.0 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0, 0, 0 };
+  if (layering_strategy_ == "equal_2") {
+    // EQUAL --- 2 LAYERS
+    num_layers_ = 2;
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
 
-//  // EQUAL --- 8 LAYERS
-//  num_layers_ = 8;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 12.5, 12.5, 12.5, 12.5, 12.5, 12.5, 12.5, 12.5 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    layer_percentages[0] = 50.0;
+    layer_percentages[1] = 50.0;
 
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
 
-//  // PERCENTAGE --- 2 LAYERS
-//  num_layers_ = 2;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 25.0, 75.0 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0 };
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+  } else if (layering_strategy_ == "equal_4") {
+    // EQUAL --- 4 LAYERS
+    num_layers_ = 4;
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
 
-//  // PERCENTAGE --- 4 LAYERS
-//  num_layers_ = 4;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 6.25, 18.75, 18.75, 56.25 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0, 0, 0 };
+    layer_percentages[0] = 25.0;
+    layer_percentages[1] = 25.0;
+    layer_percentages[2] = 25.0;
+    layer_percentages[3] = 25.0;
 
-//  // PERCENTAGE --- 8 LAYERS
-//  num_layers_ = 8;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 1.5625, 4.6875, 4.6875, 4.6875, 14.0625, 14.0625, 14.0625, 42.1875 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+    layer_min_sizes[2] = min_layer_size;
+    layer_min_sizes[3] = min_layer_size;
 
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+    layer_max_sizes[2] = 0;
+    layer_max_sizes[3] = 0;
+  } else if (layering_strategy_ == "equal_8") {
+    // EQUAL --- 8 LAYERS
+    num_layers_ = 8;
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
 
-  // EXPONENTIAL --- 2 LAYERS
-  num_layers_ = 2;
-  layer_splitting_strategy = kPercentageLowerUpperBounded;
-  float layer_percentages[] = { 0.0, 0.0 };
-  int layer_min_sizes[] = { min_layer_size, min_layer_size };
-  int layer_max_sizes[] = { 0, 0 };
+    layer_percentages[0] = 12.5;
+    layer_percentages[1] = 12.5;
+    layer_percentages[2] = 12.5;
+    layer_percentages[3] = 12.5;
+    layer_percentages[4] = 12.5;
+    layer_percentages[5] = 12.5;
+    layer_percentages[6] = 12.5;
+    layer_percentages[7] = 12.5;
 
-//  // EXPONENTIAL --- 4 LAYERS
-//  num_layers_ = 4;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 0.0, 0.0, 0.0, 0.0 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0, 0, 0 };
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+    layer_min_sizes[2] = min_layer_size;
+    layer_min_sizes[3] = min_layer_size;
+    layer_min_sizes[4] = min_layer_size;
+    layer_min_sizes[5] = min_layer_size;
+    layer_min_sizes[6] = min_layer_size;
+    layer_min_sizes[7] = min_layer_size;
 
-//  // EXPONENTIAL --- 8 LAYERS
-//  num_layers_ = 8;
-//  layer_splitting_strategy = kPercentageLowerUpperBounded;
-//  float layer_percentages[] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
-//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size };
-//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+    layer_max_sizes[2] = 0;
+    layer_max_sizes[3] = 0;
+    layer_max_sizes[4] = 0;
+    layer_max_sizes[5] = 0;
+    layer_max_sizes[6] = 0;
+    layer_max_sizes[7] = 0;
+  } else if (layering_strategy_ == "percentage_2") {
+    // PERCENTAGE --- 2 LAYERS
+    num_layers_ = 2;
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
 
+    layer_percentages[0] = 25.0;
+    layer_percentages[1] = 75.0;
+
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+  } else if (layering_strategy_ == "percentage_4") {
+    // PERCENTAGE --- 4 LAYERS
+    num_layers_ = 4;
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
+
+    layer_percentages[0] = 6.25;
+    layer_percentages[1] = 18.75;
+    layer_percentages[2] = 18.75;
+    layer_percentages[3] = 56.25;
+
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+    layer_min_sizes[2] = min_layer_size;
+    layer_min_sizes[3] = min_layer_size;
+
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+    layer_max_sizes[2] = 0;
+    layer_max_sizes[3] = 0;
+  } else if (layering_strategy_ == "percentage_8") {
+    // PERCENTAGE --- 8 LAYERS
+    num_layers_ = 8;
+    layer_splitting_strategy = kPercentageLowerUpperBounded;
+
+    layer_percentages[0] = 1.5625;
+    layer_percentages[1] = 4.6875;
+    layer_percentages[2] = 4.6875;
+    layer_percentages[3] = 4.6875;
+    layer_percentages[4] = 14.0625;
+    layer_percentages[5] = 14.0625;
+    layer_percentages[6] = 14.0625;
+    layer_percentages[7] = 42.1875;
+
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+    layer_min_sizes[2] = min_layer_size;
+    layer_min_sizes[3] = min_layer_size;
+    layer_min_sizes[4] = min_layer_size;
+    layer_min_sizes[5] = min_layer_size;
+    layer_min_sizes[6] = min_layer_size;
+    layer_min_sizes[7] = min_layer_size;
+
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+    layer_max_sizes[2] = 0;
+    layer_max_sizes[3] = 0;
+    layer_max_sizes[4] = 0;
+    layer_max_sizes[5] = 0;
+    layer_max_sizes[6] = 0;
+    layer_max_sizes[7] = 0;
+  } else if (layering_strategy_ == "exponential_2") {
+    // EXPONENTIAL --- 2 LAYERS
+    num_layers_ = 2;
+    layer_splitting_strategy = kExponentiallyIncreasing;
+
+    layer_percentages[0] = 0;
+    layer_percentages[1] = 0;
+
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+  } else if (layering_strategy_ == "exponential_4") {
+    // EXPONENTIAL --- 4 LAYERS
+    num_layers_ = 4;
+    layer_splitting_strategy = kExponentiallyIncreasing;
+
+    layer_percentages[0] = 0;
+    layer_percentages[1] = 0;
+    layer_percentages[2] = 0;
+    layer_percentages[3] = 0;
+
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+    layer_min_sizes[2] = min_layer_size;
+    layer_min_sizes[3] = min_layer_size;
+
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+    layer_max_sizes[2] = 0;
+    layer_max_sizes[3] = 0;
+  } else if (layering_strategy_ == "exponential_8") {
+    // EXPONENTIAL --- 8 LAYERS
+    num_layers_ = 8;
+    layer_splitting_strategy = kExponentiallyIncreasing;
+
+    layer_percentages[0] = 0;
+    layer_percentages[1] = 0;
+    layer_percentages[2] = 0;
+    layer_percentages[3] = 0;
+    layer_percentages[4] = 0;
+    layer_percentages[5] = 0;
+    layer_percentages[6] = 0;
+    layer_percentages[7] = 0;
+
+    layer_min_sizes[0] = min_layer_size;
+    layer_min_sizes[1] = min_layer_size;
+    layer_min_sizes[2] = min_layer_size;
+    layer_min_sizes[3] = min_layer_size;
+    layer_min_sizes[4] = min_layer_size;
+    layer_min_sizes[5] = min_layer_size;
+    layer_min_sizes[6] = min_layer_size;
+    layer_min_sizes[7] = min_layer_size;
+
+    layer_max_sizes[0] = 0;
+    layer_max_sizes[1] = 0;
+    layer_max_sizes[2] = 0;
+    layer_max_sizes[3] = 0;
+    layer_max_sizes[4] = 0;
+    layer_max_sizes[5] = 0;
+    layer_max_sizes[6] = 0;
+    layer_max_sizes[7] = 0;
+  } else {
+    exit(1);
+  }
   //////////////////////////////////////////////////////////////////////////////
 
 
