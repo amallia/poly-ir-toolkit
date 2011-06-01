@@ -346,12 +346,13 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
     // is sized to at least the minimum number of postings specified by the user.  We then select an integer x such that the (initial_layer_size) * (2**x)
     // is at least the minimum_layer_size.  Successive layers will be multiplied by 2**(x-i) where i the layer number; we do not multiply by negative powers of
     // 2.  This makes further layers also bigger but by a smaller power of 2 since it's already exponentially bigger as is.
-    int initial_layer_size = (base - 1.0) * pow(base, 0);
     int x = 0;
     if (layer_min_sizes[0] != 0) {
       int initial_layer_min_size = layer_min_sizes[0];
+      int initial_layer_size = max(1.0, (base - 1.0) * pow(base, 0));
+
       float size_up_factor = initial_layer_min_size / initial_layer_size;
-      size_up_factor = min(1.0f, size_up_factor);
+      size_up_factor = max(1.0f, size_up_factor);
       x = ceil(log2(size_up_factor));
     }
 
