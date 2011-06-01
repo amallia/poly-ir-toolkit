@@ -386,7 +386,7 @@ void QueryProcessor::CloseListLayers(int num_query_terms, int max_layers, ListDa
 
 // A DAAT based approach to multi-layered, non-overlapping lists.
 // This is an exhaustive algorithm. For optimization, use WAND or MaxScore.
-/*int QueryProcessor::ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
+int QueryProcessor::ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
   const int kMaxLayers = MAX_LIST_LAYERS;  // Assume our lists can contain this many layers.
   const int kMaxNumResults = *num_results;
 
@@ -418,11 +418,10 @@ void QueryProcessor::CloseListLayers(int num_query_terms, int max_layers, ListDa
 
   delete[] lists;
   return total_num_results;
-}*/
+}
 
 // A DAAT based approach to multi-layered, non-overlapping lists. This is using MaxScore to speed stuff up.
-// TODO: Would be interesting to make equal sized layers...
-int QueryProcessor::ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
+int QueryProcessor::ProcessMultiLayeredDaatOrMaxScoreQuery(LexiconData** query_term_data, int num_query_terms, Result* results, int* num_results) {
   const int kMaxLayers = MAX_LIST_LAYERS;  // Assume our lists can contain this many layers.
   const int kMaxNumResults = *num_results;
 
@@ -2779,6 +2778,7 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
       break;
     case kDaatOr:
     case kMultiLayeredDaatOr:
+    case kMultiLayeredDaatOrMaxScore:
     case kLayeredTaatOrEarlyTerminated:
     case kWand:
     case kDualLayeredWand:
@@ -2832,6 +2832,9 @@ void QueryProcessor::ExecuteQuery(string query_line, int qid) {
         break;
       case kMultiLayeredDaatOr:
         total_num_results = ProcessMultiLayeredDaatOrQuery(query_term_data, num_query_terms, ranked_results, &results_size);
+        break;
+      case kMultiLayeredDaatOrMaxScore:
+        total_num_results = ProcessMultiLayeredDaatOrMaxScoreQuery(query_term_data, num_query_terms, ranked_results, &results_size);
         break;
       case kLayeredTaatOrEarlyTerminated:
         total_num_results = ProcessLayeredTaatPrunedEarlyTerminatedQuery(query_term_data, num_query_terms, ranked_results, &results_size);
@@ -3011,6 +3014,7 @@ void QueryProcessor::LoadIndexProperties() {
       break;
     case kLayeredTaatOrEarlyTerminated:
     case kMultiLayeredDaatOr:
+    case kMultiLayeredDaatOrMaxScore:
       if (!index_layered_ || index_overlapping_layers_) {
         inappropriate_algorithm = true;
       }

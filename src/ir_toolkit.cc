@@ -931,6 +931,8 @@ int main(int argc, char** argv) {
             command_line_args.query_algorithm = QueryProcessor::kDualLayeredOverlappingMergeDaat;
           else if (strcmp("multi-layered-daat-or", optarg) == 0)
             command_line_args.query_algorithm = QueryProcessor::kMultiLayeredDaatOr;
+          else if (strcmp("multi-layered-daat-or-max-score", optarg) == 0)
+            command_line_args.query_algorithm = QueryProcessor::kMultiLayeredDaatOrMaxScore;
           else if (strcmp("layered-taat-or-early-terminated", optarg) == 0)
             command_line_args.query_algorithm = QueryProcessor::kLayeredTaatOrEarlyTerminated;
           else if (strcmp("wand", optarg) == 0)
