@@ -174,29 +174,102 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
   // TODO: Should be able to define these in the configuration file.
 
   //////////////////////////////////////////////////////////////////////////////
+  // TODO: For testing purposes, override layering settings from the configuration file.
+  overlapping_layers_ = false;
+  int min_layer_size = 32768;
+
+//  // EQUAL --- 2 LAYERS
+//  num_layers_ = 2;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 50.0, 50.0 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0 };
+
+//  // EQUAL --- 4 LAYERS
+//  num_layers_ = 4;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 25.0, 25.0, 25.0, 25.0 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0, 0, 0 };
+
+//  // EQUAL --- 8 LAYERS
+//  num_layers_ = 8;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 12.5, 12.5, 12.5, 12.5, 12.5, 12.5, 12.5, 12.5 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+
+//  // PERCENTAGE --- 2 LAYERS
+//  num_layers_ = 2;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 25.0, 75.0 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0 };
+
+//  // PERCENTAGE --- 4 LAYERS
+//  num_layers_ = 4;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 6.25, 18.75, 18.75, 56.25 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0, 0, 0 };
+
+//  // PERCENTAGE --- 8 LAYERS
+//  num_layers_ = 8;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 1.5625, 4.6875, 4.6875, 4.6875, 14.0625, 14.0625, 14.0625, 42.1875 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+
+  // EXPONENTIAL --- 2 LAYERS
+  num_layers_ = 2;
+  layer_splitting_strategy = kPercentageLowerUpperBounded;
+  float layer_percentages[] = { 0.0, 0.0 };
+  int layer_min_sizes[] = { min_layer_size, min_layer_size };
+  int layer_max_sizes[] = { 0, 0 };
+
+//  // EXPONENTIAL --- 4 LAYERS
+//  num_layers_ = 4;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 0.0, 0.0, 0.0, 0.0 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0, 0, 0 };
+
+//  // EXPONENTIAL --- 8 LAYERS
+//  num_layers_ = 8;
+//  layer_splitting_strategy = kPercentageLowerUpperBounded;
+//  float layer_percentages[] = { 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 };
+//  int layer_min_sizes[] = { min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size, min_layer_size };
+//  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+
+  //////////////////////////////////////////////////////////////////////////////
+
+
+  //////////////////////////////////////////////////////////////////////////////
   // Standard.
-//  int layer_percentages[] = { 5, 5, 10, 15, 25, 40, 0, 0 };
+//  float layer_percentages[] = { 5, 5, 10, 15, 25, 40, 0, 0 };
 //  // Set the minimum number of postings in each layer, 0 means no limit.
 //  int layer_min_sizes[] = { 1024, 2048, 4096, 8192, 16384, 32768, 65536, 131072 };
 //  // Set the maximum number of postings in each layer, 0 means no limit.
 //  int layer_max_sizes[] = { 1024, 8192, 0, 0, 0, 0, 0, 0 };
 
 //  // Equal.
-//  int layer_percentages[] = { 10, 10, 10, 10, 15, 15, 15, 15 };
+//  float layer_percentages[] = { 10, 10, 10, 10, 15, 15, 15, 15 };
 //  // Set the minimum number of postings in each layer, 0 means no limit.
 //  int layer_min_sizes[] = { 1024, 1024, 1024, 1024, 1024, 1024, 1024, 1024 };
 //  // Set the maximum number of postings in each layer, 0 means no limit.
 //  int layer_max_sizes[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 
-  // Equal. Only a few layers.
-  int layer_percentages[] = { 25, 25, 25, 25 };
-  // Set the minimum number of postings in each layer, 0 means no limit.
-  int layer_min_sizes[] = { 4096, 4096, 4096, 4096 };
-  // Set the maximum number of postings in each layer, 0 means no limit.
-  int layer_max_sizes[] = { 0, 0, 0, 0 };
+//  // Equal. Only a few layers.
+//  float layer_percentages[] = { 25, 25, 25, 25 };
+//  // Set the minimum number of postings in each layer, 0 means no limit.
+//  int layer_min_sizes[] = { 4096, 4096, 4096, 4096 };
+//  // Set the maximum number of postings in each layer, 0 means no limit.
+//  int layer_max_sizes[] = { 0, 0, 0, 0 };
 
 //  // Subsequent layers doubled (starting from 65536 postings). Last layer will have everything that remains.
-//  int layer_percentages[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
+//  float layer_percentages[] = { 0, 0, 0, 0, 0, 0, 0, 0 };
 //  // Set the minimum number of postings in each layer, 0 means no limit.
 //  int layer_min_sizes[] = { 65536, 131072, 262144, 524288, 1048576, 2097152, 4194304, 8388608 };
 //  // Set the maximum number of postings in each layer, 0 means no limit.
@@ -269,6 +342,18 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
     // For the exponentially increasing bucket size implementation.
     float base = pow(index_entry_offset, 1.0 / num_layers_);
+    // The exponentially increasing bucket sizes for the initial layers are too small.  To solve this problem, we make sure that the first layer
+    // is sized to at least the minimum number of postings specified by the user.  We then select an integer x such that the (initial_layer_size) * (2**x)
+    // is at least the minimum_layer_size.  Successive layers will be multiplied by 2**(x-i) where i the layer number; we do not multiply by negative powers of
+    // 2.  This makes further layers also bigger but by a smaller power of 2 since it's already exponentially bigger as is.
+    int initial_layer_size = (base - 1.0) * pow(base, 0);
+    int x = 0;
+    if (layer_min_sizes[0] != 0) {
+      int initial_layer_min_size = layer_min_sizes[0];
+      float size_up_factor = initial_layer_min_size / initial_layer_size;
+      size_up_factor = min(1.0f, size_up_factor);
+      x = ceil(log2(size_up_factor));
+    }
 
     float list_score_threshold = 0;  // The upperbound score for the whole list.
     int total_num_postings = index_entry_offset;
@@ -290,6 +375,14 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
           break;
         case kExponentiallyIncreasing:
           num_postings_curr_layer = (base - 1.0) * pow(base, i);
+
+          // Modify our exponential bucket size to make the initial layers bigger.
+          assert(x >= 0);
+          num_postings_curr_layer = num_postings_curr_layer * pow(2, x);
+          // Decrease 'x' for successive layers.
+          if (x > 0)
+            --x;
+
           if (layer_min_sizes[i] != 0)  // A 0 means that the number of postings for this layer is not bounded.
             num_postings_curr_layer = max(num_postings_curr_layer, layer_min_sizes[i]);
           break;
