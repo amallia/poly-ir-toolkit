@@ -491,6 +491,8 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
     }*/
 
     // Initially, exponential layers are lower-bounded by a Fibonacci-like sequence.
+    const int kFirstLayer = 16384;
+    const int kSecondLayer = 32768;
     int exponential_prev_min = 0;
     int exponential_next_min = 0;
 
@@ -516,8 +518,6 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
           num_postings_curr_layer = (base - 1.0) * pow(base, i);
 
           // Follow a Fibonacci-like sequence for the first few small layers.
-          const int kFirstLayer = 16384;
-          const int kSecondLayer = 32768;
           if (exponential_next_min < kFirstLayer) {
             exponential_prev_min = kFirstLayer;
             exponential_next_min = kFirstLayer;
