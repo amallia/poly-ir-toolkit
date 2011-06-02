@@ -475,7 +475,8 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
 
     // For the exponentially increasing bucket size implementation.
     float base = pow(index_entry_offset, 1.0 / num_layers_);
-    // The exponentially increasing bucket sizes for the initial layers are too small.  To solve this problem, we make sure that the first layer
+
+    /*// The exponentially increasing bucket sizes for the initial layers are too small.  To solve this problem, we make sure that the first layer
     // is sized to at least the minimum number of postings specified by the user.  We then select an integer x such that the (initial_layer_size) * (2**x)
     // is at least the minimum_layer_size.  Successive layers will be multiplied by 2**(x-i) where i the layer number; we do not multiply by negative powers of
     // 2.  This makes further layers also bigger but by a smaller power of 2 since it's already exponentially bigger as is.
@@ -487,7 +488,11 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
       float size_up_factor = initial_layer_min_size / initial_layer_size;
       size_up_factor = max(1.0f, size_up_factor);
       x = ceil(log2(size_up_factor));
-    }
+    }*/
+
+    // Initially, exponential layers are lower-bounded by a Fibonacci-like sequence.
+    int exponential_prev_min = 0;
+    int exponential_next_min = 0;
 
     float list_score_threshold = 0;  // The upperbound score for the whole list.
     int total_num_postings = index_entry_offset;
@@ -510,12 +515,31 @@ void LayeredIndexGenerator::CreateLayeredIndex() {
         case kExponentiallyIncreasing:
           num_postings_curr_layer = (base - 1.0) * pow(base, i);
 
-          // Modify our exponential bucket size to make the initial layers bigger.
+          // Follow a Fibonacci-like sequence for the first few small layers.
+          const int kFirstLayer = 16384;
+          const int kSecondLayer = 32768;
+          if (exponential_next_min < kFirstLayer) {
+            exponential_prev_min = kFirstLayer;
+            exponential_next_min = kFirstLayer;
+          } else if (exponential_next_min < kSecondLayer) {
+            exponential_prev_min = kFirstLayer;
+            exponential_next_min = kSecondLayer;
+          } else {
+            int tmp = exponential_prev_min;
+            exponential_prev_min = exponential_next_min;
+            exponential_next_min = tmp + exponential_next_min;
+          }
+
+          if (num_postings_curr_layer < exponential_next_min) {
+            num_postings_curr_layer = exponential_next_min;
+          }
+
+          /*// Modify our exponential bucket size to make the initial layers bigger.
           assert(x >= 0);
           num_postings_curr_layer = num_postings_curr_layer * pow(2, x);
           // Decrease 'x' for successive layers.
           if (x > 0)
-            --x;
+            --x;*/
 
           if (layer_min_sizes[i] != 0)  // A 0 means that the number of postings for this layer is not bounded.
             num_postings_curr_layer = max(num_postings_curr_layer, layer_min_sizes[i]);
