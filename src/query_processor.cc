@@ -365,8 +365,12 @@ void QueryProcessor::OpenListLayers(LexiconData** query_term_data, int num_query
             << query_term_data[i]->layer_score_threshold(j) << ", num_docs: " << query_term_data[i]->layer_num_docs(j) << "\n";
 #endif
       } else {
+        // We set any remaining layers to NULL.
+        list_data_pointers[i][j] = NULL;
+
+        // TODO: We no longer do this. The only algorithm that depends on this behavior is 'ProcessLayeredQuery()'.
         // For any remaining layers we don't have, we just open up the last layer.
-        list_data_pointers[i][j] = index_reader_.OpenList(*query_term_data[i], query_term_data[i]->num_layers() - 1, *single_term_query, i);
+        /*list_data_pointers[i][j] = index_reader_.OpenList(*query_term_data[i], query_term_data[i]->num_layers() - 1, *single_term_query, i);*/
       }
     }
 
@@ -379,7 +383,8 @@ void QueryProcessor::OpenListLayers(LexiconData** query_term_data, int num_query
 void QueryProcessor::CloseListLayers(int num_query_terms, int max_layers, ListData* list_data_pointers[][MAX_LIST_LAYERS]) {
   for (int i = 0; i < num_query_terms; ++i) {
     for (int j = 0; j < max_layers; ++j) {
-      index_reader_.CloseList(list_data_pointers[i][j]);
+      if (list_data_pointers[i][j] != NULL)
+        index_reader_.CloseList(list_data_pointers[i][j]);
     }
   }
 }
@@ -410,7 +415,8 @@ int QueryProcessor::ProcessMultiLayeredDaatOrQuery(LexiconData** query_term_data
   // Clean up.
   for (int i = 0; i < num_query_terms; ++i) {
     for (int j = 0; j < kMaxLayers; ++j) {
-      index_reader_.CloseList(list_data_pointers[i][j]);
+      if (list_data_pointers[i][j] != NULL)
+        index_reader_.CloseList(list_data_pointers[i][j]);
     }
   }
 
@@ -864,7 +870,8 @@ int QueryProcessor::ProcessLayeredTaatPrunedEarlyTerminatedQuery(LexiconData** q
   // Clean up.
   for (int i = 0; i < num_query_terms; ++i) {
     for (int j = 0; j < kMaxLayers; ++j) {
-      index_reader_.CloseList(list_data_pointers[i][j]);
+      if (list_data_pointers[i][j] != NULL)
+        index_reader_.CloseList(list_data_pointers[i][j]);
     }
   }
 
