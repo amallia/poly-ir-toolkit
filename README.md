@@ -1,3 +1,6 @@
+# poly-ir-toolkit
+_Information retrieval toolkit for large document collections._
+
 <p>Developed at the Web Exploration and Search Technology Lab at the <a href="http://poly.edu/">Polytechnic Institute of NYU</a>, under the advisement of <a href="http://cis.poly.edu/suel/">Professor Torsten Suel</a>, PolyIRTK provides tools for indexing and querying large document collections.</p>
 
 <p>The aim of PolyIRTK is to act as a platform for research into new algorithms for compression/decompression, querying, and indexing techniques. It implements a number of techniques from recent research literature that improves on the efficiency of indexing and querying. PolyIRTK is also focused on query optimization and early termination algorithms with rank safe properties (that is, faster querying performance, with absolutely no loss in result quality).
